@@ -1,0 +1,112 @@
+# nginx/deployment.yaml
+#
+# Nginx actúa como ingress/load balancer interno.
+# En un cluster real se usaría un Ingress Controller (nginx-ingress),
+# pero este Deployment es suficiente para el entorno local con minikube.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: restaurantes
+data:
+  nginx.conf: |
+    worker_processes auto;
+
+    events {
+      worker_connections 1024;
+    }
+
+    http {
+      # api-service y search-service son los nombres de los Services de K8s.
+      # El DNS interno del cluster resuelve estos nombres automáticamente.
+      upstream api_backend {
+        server api-service:80;
+        keepalive 32;
+      }
+
+      upstream search_backend {
+        server search-service:80;
+        keepalive 16;
+      }
+
+      server {
+        listen 80;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        location /api/ {
+          proxy_pass http://api_backend;
+        }
+
+        location /search/ {
+          proxy_pass http://search_backend;
+        }
+
+        location /health {
+          access_log off;
+          return 200 "ok\n";
+          add_header Content-Type text/plain;
+        }
+      }
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+  namespace: restaurantes
+  labels:
+    app: nginx
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: nginx-config
+              mountPath: /etc/nginx/nginx.conf
+              subPath: nginx.conf
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu:    "50m"
+              memory: "64Mi"
+            limits:
+              cpu:    "200m"
+              memory: "128Mi"
+      volumes:
+        - name: nginx-config
+          configMap:
+            name: nginx-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+  namespace: restaurantes
+spec:
+  selector:
+    app: nginx
+  ports:
+    - protocol: TCP
+      port:       80
+      targetPort: 80
+  type: LoadBalancer

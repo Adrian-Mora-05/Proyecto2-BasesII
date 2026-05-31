@@ -1,0 +1,113 @@
+# keycloak/deployment.yaml
+#
+# Keycloak en modo dev con H2 persistente en disco.
+# Válido para entorno local/minikube — no requiere Postgres separado.
+#
+# Para producción: agregar KC_DB=postgres y un StatefulSet de Postgres.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: keycloak-pvc
+  namespace: restaurantes
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: restaurantes
+  labels:
+    app: keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:24.0
+          args: ["start-dev", "--import-realm"]
+          env:
+            - name: KEYCLOAK_ADMIN
+              valueFrom:
+                secretKeyRef:
+                  name: restaurantes-secrets
+                  key:  KEYCLOAK_ADMIN
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: restaurantes-secrets
+                  key:  KEYCLOAK_ADMIN_PASSWORD
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_HOSTNAME_STRICT
+              value: "false"
+            - name: KC_HOSTNAME_STRICT_HTTPS
+              value: "false"
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            # H2 con archivo persistente en disco — no crashea al reiniciar
+            - name: KC_DB
+              value: "dev-file"
+            - name: KC_DB_URL
+              value: "jdbc:h2:file:/opt/keycloak/data/h2/keycloakdb;DB_CLOSE_ON_EXIT=FALSE;DB_CLOSE_DELAY=-1"
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: realm-config
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+            - name: keycloak-data
+              mountPath: /opt/keycloak/data/h2  
+          readinessProbe:
+            httpGet:
+              path: /realms/master
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 15
+          livenessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            initialDelaySeconds: 90
+            periodSeconds: 20
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu:    "300m"
+              memory: "768Mi"
+            limits:
+              cpu:    "1000m"
+              memory: "1.5Gi"
+      volumes:
+        - name: realm-config
+          configMap:
+            name: keycloak-realm-config
+        - name: keycloak-data
+          persistentVolumeClaim:
+            claimName: keycloak-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-service
+  namespace: restaurantes
+spec:
+  selector:
+    app: keycloak
+  ports:
+    - protocol: TCP
+      port:       8080
+      targetPort: 8080
+  type: ClusterIP

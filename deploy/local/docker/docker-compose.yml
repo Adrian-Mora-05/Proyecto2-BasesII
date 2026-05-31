@@ -1,0 +1,208 @@
+# HAY QUE AGREGAR LOS SERVICIOS DE MONGO, Y CONECTAR A MONGO EN EL APP.JS
+# 1 primario y 1 secundario, para tener replicación y alta disponibilidad
+# poner 3 replicas y agregar volúmenes
+
+services:
+
+  db_api:
+    image: postgres:16
+    container_name: db_api
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${RESTAURANT_DB}
+    ports:
+      - "5435:5432"
+    volumes:
+      - pgdata_api:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${RESTAURANT_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  db_keycloak:
+    image: postgres:16
+    container_name: db_keycloak
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${KEYCLOAK_DB}
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata_keycloak:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${KEYCLOAK_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: keycloak
+    depends_on:
+      db_keycloak:
+        condition: service_healthy
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://db_keycloak:5432/${KEYCLOAK_DB}
+      KC_DB_USERNAME: ${POSTGRES_USER}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      KC_HOSTNAME: localhost          
+      KC_HOSTNAME_PORT: 8080          
+      KC_HOSTNAME_STRICT: false       
+      KC_HTTP_ENABLED: true           
+
+      KC_IMPORT: /opt/keycloak/data/import/realm-export.json
+    volumes:
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
+    command: ["start-dev", "--import-realm"]
+    ports:
+      - "8080:8080"
+
+  api:
+    build: ./api
+    container_name: api
+    depends_on:
+      db_api:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+      mongo1:
+        condition: service_started
+      mongo2:
+        condition: service_started
+      mongo3:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    environment:
+      DB_HOST: db_api
+      DB_PORT: 5432
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${RESTAURANT_DB}
+      DB_ENGINE: ${DB_ENGINE}
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_PUBLIC_URL: http://localhost:8080 
+      REALM: ${REALM}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID}         
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET} 
+      KEYCLOAK_ADMIN_CLIENT_ID: ${KEYCLOAK_ADMIN_CLIENT_ID}
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "3000:3000"
+  
+  api_test:
+    build: ./api
+    container_name: api_test
+    profiles: ["test"]          # solo corre si pedimos el profile "test"
+    depends_on:
+      db_api:
+        condition: service_healthy
+      keycloak:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    environment:
+      DB_HOST: db_api
+      DB_PORT: 5432
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${RESTAURANT_DB}
+      KEYCLOAK_URL: http://keycloak:8080
+      REALM: ${REALM}
+      REDIS_URL: redis://redis:6379
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      KEYCLOAK_ADMIN_CLIENT_ID: ${KEYCLOAK_ADMIN_CLIENT_ID}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+    command: ["npm", "test"]
+
+
+  mongo1:
+      image: mongo:7
+      container_name: mongo1
+      command: mongod --replSet rs0 --bind_ip_all
+      ports:
+        - "27017:27017"
+      volumes:
+        - mongo1_data:/data/db
+
+  mongo2:
+      image: mongo:7
+      container_name: mongo2
+      command: mongod --replSet rs0 --bind_ip_all
+      ports:
+        - "27018:27017"
+      volumes:
+        - mongo2_data:/data/db
+
+  mongo3:
+      image: mongo:7
+      container_name: mongo3
+      command: mongod --replSet rs0 --bind_ip_all
+      ports:
+        - "27019:27017"
+      volumes:
+        - mongo3_data:/data/db
+
+  mongo-init:
+      image: mongo:7
+      container_name: mongo-init
+      depends_on:
+        - mongo1
+        - mongo2
+        - mongo3
+      entrypoint: >
+        bash -c "sleep 10 && mongosh --host mongo1 --eval '
+          rs.initiate({
+            _id: \"rs0\",
+            members: [
+              { _id: 0, host: \"mongo1:27017\" },
+              { _id: 1, host: \"mongo2:27017\" },
+              { _id: 2, host: \"mongo3:27017\" }
+            ]
+          })'
+        "
+      restart: on-failure
+
+  # Servidor de Redis para caché
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    # El comando configura Redis con:
+    # maxmemory: máximo 256MB de RAM
+    # maxmemory-policy: cuando se llena, borra los datos menos usados recientemente
+    #allkeys-lru:  política de limpieza, LRU significa Least Recently Used (menos usado recientemente)=> limpieza por falta de memoria (Eviction)
+    command: >
+      redis-server
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru 
+    volumes:
+      # Persiste los datos de Redis aunque el contenedor se reinicie
+      - redis_data:/data
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      
+volumes:
+  pgdata_api:
+  pgdata_keycloak:
+  mongo1_data:
+  mongo2_data:
+  mongo3_data:
+  redis_data: 

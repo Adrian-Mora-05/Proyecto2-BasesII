@@ -1,0 +1,570 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init-scripts
+  namespace: restaurantes
+
+data:
+  01_schema.sql: |
+    \connect restaurantdb
+
+    CREATE SCHEMA restaurant;
+
+    SET search_path TO restaurant;
+
+  02_tablas.sql: |
+    \connect restaurantdb
+
+    SET search_path TO restaurant;
+
+    CREATE TABLE IF NOT EXISTS rol_usuario (
+        id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        nombre VARCHAR(50) NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS estado_reservacion (
+        id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        nombre VARCHAR(50) NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS estado_pedido (
+        id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        nombre VARCHAR(50) NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS tipo_pedido (
+        id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        nombre VARCHAR(50) NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS restaurante (
+        id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        nombre VARCHAR(150) NOT NULL,
+        direccion TEXT,
+        telefono VARCHAR(20)
+    );
+
+    CREATE TABLE IF NOT EXISTS usuario (
+        id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        id_external_auth VARCHAR(255),
+        nombre VARCHAR(100) NOT NULL,
+        correo VARCHAR(150) UNIQUE NOT NULL,
+        id_rol_usuario INT NOT NULL,
+        FOREIGN KEY (id_rol_usuario)
+            REFERENCES rol_usuario(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS mesa (
+        id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        id_restaurante INT NOT NULL,
+        num_mesa INT NOT NULL,
+        capacidad INT NOT NULL,
+        FOREIGN KEY (id_restaurante)
+            REFERENCES restaurante(id)
+            ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_mesa_restaurante ON mesa(id_restaurante);
+
+    CREATE TABLE IF NOT EXISTS reservacion (
+        id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        id_usuario INT NOT NULL,
+        id_restaurante INT NOT NULL,
+        id_mesa INT NOT NULL,
+        fecha_hora TIMESTAMP NOT NULL,
+        duracion INT NOT NULL,
+        cant_personas INT NOT NULL,
+        id_estado_reservacion INT NOT NULL,
+
+        FOREIGN KEY (id_usuario)
+            REFERENCES usuario(id)
+            ON DELETE CASCADE,
+
+        FOREIGN KEY (id_restaurante)
+            REFERENCES restaurante(id)
+            ON DELETE CASCADE,
+
+        FOREIGN KEY (id_mesa)
+            REFERENCES mesa(id)
+            ON DELETE CASCADE,
+
+        FOREIGN KEY (id_estado_reservacion)
+            REFERENCES estado_reservacion(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS menu (
+        id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        nombre VARCHAR(100),
+        id_restaurante INT NOT NULL,
+        ultima_actualizacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+        FOREIGN KEY (id_restaurante)
+            REFERENCES restaurante(id)
+            ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_menu_restaurante ON menu(id_restaurante);
+
+    CREATE TABLE IF NOT EXISTS plato (
+        id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        id_menu INT NOT NULL,
+        nombre VARCHAR(150) NOT NULL,
+        precio NUMERIC(10,2) NOT NULL,
+        descripcion TEXT,
+        categoria VARCHAR(100),
+
+        FOREIGN KEY (id_menu)
+            REFERENCES menu(id)
+            ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS pedido (
+        id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        id_usuario INT NOT NULL,
+        id_restaurante INT NOT NULL,
+        descripcion TEXT,
+        precio_total NUMERIC(10,2),
+        id_estado_pedido INT NOT NULL,
+        id_tipo_pedido INT NOT NULL,
+
+        FOREIGN KEY (id_usuario)
+            REFERENCES usuario(id),
+
+        FOREIGN KEY (id_restaurante)
+            REFERENCES restaurante(id)
+            ON DELETE CASCADE,
+
+        FOREIGN KEY (id_estado_pedido)
+            REFERENCES estado_pedido(id),
+
+        FOREIGN KEY (id_tipo_pedido)
+            REFERENCES tipo_pedido(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS plato_x_pedido (
+        id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        id_plato INT NOT NULL,
+        id_pedido INT NOT NULL,
+        cantidad INT NOT NULL,
+        subtotal NUMERIC(10,2),
+
+        FOREIGN KEY (id_plato)
+            REFERENCES plato(id)
+            ON DELETE CASCADE,
+
+        FOREIGN KEY (id_pedido)
+            REFERENCES pedido(id)
+            ON DELETE CASCADE
+    );
+
+  03_funciones.sql: |
+    \connect restaurantdb
+
+    SET search_path TO restaurant;
+
+    -- En Postgres se usan funciones en vez de SPs
+
+    -- 1. GetDetallesUser
+    CREATE OR REPLACE FUNCTION get_detalles_user(p_id INT)
+    RETURNS TABLE(
+        id INT,
+        nombre VARCHAR,
+        correo VARCHAR,
+        rol VARCHAR
+    )
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+    RETURN QUERY
+    SELECT u.id, u.nombre, u.correo, r.nombre
+    FROM usuario u
+    JOIN rol_usuario r ON u.id_rol_usuario = r.id
+    WHERE u.id = p_id;
+    END;
+    $$;
+
+
+    -- 2. ActualizarUser
+    CREATE OR REPLACE FUNCTION actualizar_user(
+        p_id INT,
+        p_nombre VARCHAR,
+        p_correo VARCHAR
+    )
+    RETURNS VOID
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+
+    UPDATE usuario
+    SET nombre = p_nombre,
+        correo = p_correo
+    WHERE id = p_id;
+
+    END;
+    $$;
+
+
+    -- 3. BorrarUser
+    CREATE OR REPLACE FUNCTION borrar_user(p_id INT)
+    RETURNS VOID
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+
+    DELETE FROM usuario
+    WHERE id = p_id;
+
+    END;
+    $$;
+
+
+    --4. RegistrarRestaurante
+    CREATE OR REPLACE FUNCTION restaurant.registrar_restaurante(
+        p_nombre VARCHAR,
+        p_direccion TEXT,
+        p_telefono VARCHAR
+    )
+    RETURNS INT
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE new_id INT;
+    BEGIN
+
+    INSERT INTO restaurant.restaurante (nombre, direccion, telefono)
+    VALUES (p_nombre, p_direccion, p_telefono)
+    RETURNING id INTO new_id;
+
+    RETURN new_id;
+
+    END;
+    $$;
+
+
+    --5. ListarRestaurantes
+    CREATE OR REPLACE FUNCTION listar_restaurantes()
+    RETURNS TABLE(
+        id INT,
+        nombre VARCHAR,
+        direccion TEXT,
+        telefono VARCHAR
+    )
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+
+    RETURN QUERY
+    SELECT r.id,r.nombre,r.direccion,r.telefono
+    FROM restaurant.restaurante r;
+
+    END;
+    $$;
+
+
+    --6. CrearMenú
+    CREATE OR REPLACE FUNCTION restaurant.crear_menu(
+        p_nombre VARCHAR,
+        p_id_restaurante INT
+    )
+    RETURNS INT
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE new_id INT;
+    BEGIN
+
+    INSERT INTO restaurant.menu AS m(nombre,id_restaurante)
+    VALUES(p_nombre,p_id_restaurante)
+    RETURNING m.id INTO new_id;
+
+    RETURN new_id;
+
+    END;
+    $$;
+
+
+    --7. GetDetallesMenú
+    CREATE OR REPLACE FUNCTION restaurant.get_detalles_menu(p_id INT)
+    RETURNS TABLE(
+        id INT,
+        nombre VARCHAR,
+        id_restaurante INT,
+        ultima_actualizacion TIMESTAMP
+    )
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+
+    RETURN QUERY
+    SELECT m.id,m.nombre,m.id_restaurante,m.ultima_actualizacion
+    FROM restaurant.menu m
+    WHERE m.id = p_id;
+
+    END;
+    $$;
+
+
+    --8. ActualizarMenú
+    CREATE OR REPLACE FUNCTION restaurant.actualizar_menu(
+        p_id INT,
+        p_nombre VARCHAR
+    )
+    RETURNS VOID
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+
+    UPDATE restaurant.menu m
+    SET nombre = p_nombre,
+        ultima_actualizacion = CURRENT_TIMESTAMP
+    WHERE m.id = p_id;
+
+    END;
+    $$;
+
+
+    --9. BorrarMenú
+    CREATE OR REPLACE FUNCTION restaurant.borrar_menu(p_id INT)
+    RETURNS VOID
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+
+    DELETE FROM restaurant.menu m
+    WHERE m.id = p_id;
+
+    END;
+    $$;
+
+
+    --10. Reservar
+    CREATE OR REPLACE FUNCTION restaurant.reservar(
+        p_id_usuario INT,
+        p_id_restaurante INT,
+        p_id_mesa INT,
+        p_fecha TIMESTAMP,
+        p_duracion INT,
+        p_personas INT
+    )
+    RETURNS INT
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE 
+        new_id INT;
+        conflicto INT;
+    BEGIN
+
+    -- Verificar conflictos de horario
+    SELECT 1 INTO conflicto
+    FROM restaurant.reservacion r
+    WHERE r.id_mesa = p_id_mesa
+    AND r.id_estado_reservacion = 1
+    AND (
+        p_fecha < (r.fecha_hora + (r.duracion || ' minutes')::INTERVAL)
+        AND
+        (p_fecha + (p_duracion || ' minutes')::INTERVAL) > r.fecha_hora
+    )
+    LIMIT 1;
+
+    IF conflicto IS NOT NULL THEN
+        RAISE EXCEPTION 'La mesa ya está reservada en ese horario';
+    END IF;
+
+    INSERT INTO restaurant.reservacion(
+        id_usuario,
+        id_restaurante,
+        id_mesa,
+        fecha_hora,
+        duracion,
+        cant_personas,
+        id_estado_reservacion
+    )
+    VALUES(
+        p_id_usuario,
+        p_id_restaurante,
+        p_id_mesa,
+        p_fecha,
+        p_duracion,
+        p_personas,
+        1
+    )
+    RETURNING id INTO new_id;
+
+    RETURN new_id;
+
+    END;
+    $$;
+
+
+    --11. CancelarReservación
+    CREATE OR REPLACE FUNCTION cancelar_reserva(p_id INT)
+    RETURNS VOID
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+
+    UPDATE restaurant.reservacion
+    SET id_estado_reservacion = 2
+    WHERE id = p_id;
+
+    END;
+    $$;
+
+
+    --12. RealizarPedido
+    CREATE OR REPLACE FUNCTION restaurant.realizar_pedido(
+        p_id_usuario INT,
+        p_id_restaurante INT,
+        p_descripcion TEXT,
+        p_tipo_pedido INT,
+        p_platos JSON
+    )
+    RETURNS INT
+    LANGUAGE plpgsql
+    AS $$
+    DECLARE
+        new_id INT;
+        item JSON;
+        v_plato_id INT;
+        v_cantidad INT;
+        v_precio NUMERIC;
+        v_subtotal NUMERIC;
+        total NUMERIC := 0;
+    BEGIN
+
+    -- Crear pedido vacío primero
+    INSERT INTO restaurant.pedido(
+        id_usuario,
+        id_restaurante,
+        descripcion,
+        precio_total,
+        id_estado_pedido,
+        id_tipo_pedido
+    )
+    VALUES(
+        p_id_usuario,
+        p_id_restaurante,
+        p_descripcion,
+        0,
+        1,
+        p_tipo_pedido
+    )
+    RETURNING id INTO new_id;
+
+    -- Recorrer platos
+    FOR item IN SELECT * FROM json_array_elements(p_platos)
+    LOOP
+        v_plato_id := (item->>'id_plato')::INT;
+        v_cantidad := (item->>'cantidad')::INT;
+
+        -- Obtener precio
+        SELECT precio INTO v_precio
+        FROM restaurant.plato
+        WHERE id = v_plato_id;
+
+        IF v_precio IS NULL THEN
+            RAISE EXCEPTION 'Plato % no existe', v_plato_id;
+        END IF;
+
+        v_subtotal := v_precio * v_cantidad;
+        total := total + v_subtotal;
+
+        -- Insert detalle
+        INSERT INTO restaurant.plato_x_pedido(
+            id_plato,
+            id_pedido,
+            cantidad,
+            subtotal
+        )
+        VALUES(
+            v_plato_id,
+            new_id,
+            v_cantidad,
+            v_subtotal
+        );
+    END LOOP;
+
+    -- Actualizar total
+    UPDATE restaurant.pedido
+    SET precio_total = total
+    WHERE id = new_id;
+
+    RETURN new_id;
+
+    END;
+    $$;
+
+
+    --13. GetDetallesPedido
+    CREATE OR REPLACE FUNCTION get_detalles_pedido(p_id INT)
+    RETURNS TABLE(
+        id INT,
+        usuario INT,
+        restaurante INT,
+        descripcion TEXT,
+        precio_total NUMERIC,
+        estado INT,
+        tipo INT
+    )
+    LANGUAGE plpgsql
+    AS $$
+    BEGIN
+
+    RETURN QUERY
+    SELECT p.id,
+          p.id_usuario,
+          p.id_restaurante,
+          p.descripcion,
+          p.precio_total,
+          p.id_estado_pedido,
+          p.id_tipo_pedido
+    FROM restaurant.pedido p
+    WHERE p.id = p_id;
+
+    END;
+    $$;
+
+  04_seed.sql: |
+    \connect restaurantdb
+
+    SET search_path TO restaurant;
+
+    -- limpiar tablas de catálogo antes de insertar
+    TRUNCATE TABLE rol_usuario RESTART IDENTITY CASCADE;
+    TRUNCATE TABLE estado_reservacion RESTART IDENTITY CASCADE;
+    TRUNCATE TABLE estado_pedido RESTART IDENTITY CASCADE;
+    TRUNCATE TABLE tipo_pedido RESTART IDENTITY CASCADE;
+
+    INSERT INTO rol_usuario(nombre) VALUES
+    ('admin'),
+    ('cliente');
+
+    INSERT INTO estado_reservacion(nombre) VALUES
+    ('reservada'),
+    ('cancelada');
+
+    INSERT INTO estado_pedido(nombre) VALUES
+    ('solicitado'),
+    ('entregado'),
+    ('cancelado');
+
+    INSERT INTO tipo_pedido(nombre) VALUES
+    ('comer aquí'),
+    ('para llevar');
+
+    INSERT INTO restaurant.restaurante (nombre, direccion, telefono) VALUES
+    ('La Soda Tica', 'San José Centro', '2222-1111'),
+    ('Pizza Planet', 'Escazú', '2222-2222');
+
+    INSERT INTO restaurant.mesa (id_restaurante, num_mesa, capacidad) VALUES
+    (1, 1, 4),
+    (1, 2, 2),
+    (2, 1, 6);
+
+    INSERT INTO restaurant.menu (nombre, id_restaurante) VALUES
+    ('Menú Principal', 1),
+    ('Menú Pizza', 2);
+
+    INSERT INTO restaurant.plato (id_menu, nombre, precio, descripcion, categoria) VALUES
+    (1, 'Casado', 3500, 'Comida típica costarricense', 'Típico'),
+    (1, 'Gallo Pinto', 2500, 'Desayuno típico', 'Desayuno'),
+    (2, 'Pizza Pepperoni', 8000, 'Pizza clásica', 'Pizza'),
+    (2, 'Pizza Hawaiana', 8500, 'Pizza con piña', 'Pizza');

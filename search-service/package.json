@@ -1,0 +1,19 @@
+{
+  "name": "search-service",
+  "version": "1.0.0",
+  "description": "Microservicio de búsqueda con ElasticSearch para el sistema de reserva inteligente de restaurantes",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "dependencies": {
+    "@elastic/elasticsearch": "^8.13.0",
+    "pg": "^8.11.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "ioredis": "^5.3.2",
+    "mongodb": "^6.5.0"
+  }
+}

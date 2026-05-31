@@ -1,0 +1,30 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: restaurantes-config
+  namespace: restaurantes
+data:
+  # Motor de BD — cambiar a 'mongodb' para usar el stack Mongo
+  DB_ENGINE: "mongodb"
+
+  # MongoDB (usado cuando DB_ENGINE=mongodb)
+  # Apunta a mongos (el router), no al shard directamente.
+  # mongos distribuye las queries entre shards automáticamente.
+  MONGO_URL: "mongodb://mongos-service:27017/"
+  MONGO_DB:  "restaurantdb"
+
+  # Keycloak
+  KEYCLOAK_URL:        "http://keycloak-service:8080"
+  KEYCLOAK_PUBLIC_URL: "http://localhost:9999"
+  REALM:               "restaurant"
+  KEYCLOAK_ADMIN_CLIENT_ID: "admin-cli"
+
+  # Redis
+  REDIS_URL: "redis://redis-service:6379"
+
+  # ElasticSearch
+  ELASTIC_URL: "http://elasticsearch-service:9200"
+
+  # Puertos internos
+  API_PORT:    "3000"
+  SEARCH_PORT: "4000"

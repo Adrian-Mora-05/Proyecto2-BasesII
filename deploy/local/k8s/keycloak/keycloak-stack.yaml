@@ -1,0 +1,206 @@
+# keycloak-stack.yaml
+#
+# PostgreSQL dedicado para Keycloak + Keycloak configurado para usarlo.
+# Este postgres es EXCLUSIVO para Keycloak — no tiene nada que ver con
+# la BD del proyecto (restaurantdb en MongoDB o PostgreSQL).
+
+# ── PVC para PostgreSQL de Keycloak ──────────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: keycloak-postgres-pvc
+  namespace: restaurantes
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+# ── StatefulSet PostgreSQL para Keycloak ─────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: keycloak-postgres
+  namespace: restaurantes
+  labels:
+    app: keycloak-postgres
+spec:
+  serviceName: keycloak-postgres-service
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak-postgres
+  template:
+    metadata:
+      labels:
+        app: keycloak-postgres
+    spec:
+      containers:
+        - name: keycloak-postgres
+          image: postgres:16
+          env:
+            - name: POSTGRES_DB
+              value: "keycloakdb"
+            - name: POSTGRES_USER
+              value: "keycloak"
+            - name: POSTGRES_PASSWORD
+              value: "keycloak"
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: keycloak-postgres-data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - "-U"
+                - "keycloak"
+                - "-d"
+                - "keycloakdb"
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu:    "100m"
+              memory: "256Mi"
+            limits:
+              cpu:    "500m"
+              memory: "512Mi"
+  volumeClaimTemplates:
+    - metadata:
+        name: keycloak-postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
+---
+# ── Service para PostgreSQL de Keycloak ──────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-postgres-service
+  namespace: restaurantes
+spec:
+  selector:
+    app: keycloak-postgres
+  ports:
+    - protocol: TCP
+      port:       5432
+      targetPort: 5432
+  type: ClusterIP
+---
+# ── Keycloak usando PostgreSQL ────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: restaurantes
+  labels:
+    app: keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      initContainers:
+        # Espera que PostgreSQL esté listo antes de arrancar Keycloak
+        - name: wait-for-postgres
+          image: busybox
+          command:
+            - sh
+            - "-c"
+            - |
+              until nc -z keycloak-postgres-service 5432; do
+                echo "Esperando PostgreSQL..."; sleep 3
+              done
+              echo "PostgreSQL listo"
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:24.0
+          args: ["start-dev", "--import-realm"]
+          env:
+            - name: KEYCLOAK_ADMIN
+              valueFrom:
+                secretKeyRef:
+                  name: restaurantes-secrets
+                  key:  KEYCLOAK_ADMIN
+            - name: KEYCLOAK_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: restaurantes-secrets
+                  key:  KEYCLOAK_ADMIN_PASSWORD
+            - name: KC_HTTP_ENABLED
+              value: "true"
+            - name: KC_HOSTNAME
+              value: "localhost"
+            - name: KC_HOSTNAME_PORT
+              value: "9999"
+            - name: KC_HOSTNAME_STRICT
+              value: "false"
+            - name: KC_HOSTNAME_STRICT_HTTPS
+              value: "false"
+            - name: KC_HEALTH_ENABLED
+              value: "true"
+            # PostgreSQL como BD — adiós H2
+            - name: KC_DB
+              value: "postgres"
+            - name: KC_DB_URL
+              value: "jdbc:postgresql://keycloak-postgres-service:5432/keycloakdb"
+            - name: KC_DB_USERNAME
+              value: "keycloak"
+            - name: KC_DB_PASSWORD
+              value: "keycloak"
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: realm-config
+              mountPath: /opt/keycloak/data/import
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /realms/master
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 15
+          livenessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            initialDelaySeconds: 120
+            periodSeconds: 20
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu:    "300m"
+              memory: "768Mi"
+            limits:
+              cpu:    "1000m"
+              memory: "900Mi"
+      volumes:
+        - name: realm-config
+          configMap:
+            name: keycloak-realm-config
+---
+# ── Service de Keycloak ───────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-service
+  namespace: restaurantes
+spec:
+  selector:
+    app: keycloak
+  ports:
+    - protocol: TCP
+      port:       8080
+      targetPort: 8080
+  type: ClusterIP

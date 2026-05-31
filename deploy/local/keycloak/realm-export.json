@@ -1,0 +1,75 @@
+{
+  "realm": "restaurant",
+  "enabled": true,
+  "roles": {
+    "realm": [
+      { "name": "admin" },
+      { "name": "cliente" }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "api-restaurant",
+      "enabled": true,
+      "publicClient": false,
+      "secret": "api-restaurant-secret",
+      "directAccessGrantsEnabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "protocol": "openid-connect",
+      "redirectUris": ["*"],
+
+      "protocolMappers": [
+        {
+          "name": "realm roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "roles",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "admin1",
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "admin123",
+          "temporary": false
+        }
+      ],
+      "firstName": "Admin",
+      "lastName": "Principal",
+      "email": "admin1@restaurant.com",
+      "realmRoles": ["admin"],
+      "emailVerified": true,
+      "requiredActions": []
+    },
+    {
+      "username": "cliente1",
+      "enabled": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "cliente123",
+          "temporary": false
+        }
+      ],
+      "realmRoles": ["cliente"],
+      "firstName": "Cliente",
+      "lastName": "Demo",
+      "email": "cliente1@restaurant.com",
+      "emailVerified": true,
+      "requiredActions": []
+    }
+  ]
+}

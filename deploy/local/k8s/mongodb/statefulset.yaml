@@ -1,0 +1,347 @@
+# mongodb/statefulset.yaml
+#
+# Stack MongoDB sharded para Minikube:
+#   1. Config Server  — 1 nodo (configReplSet)
+#   2. Shard rs0      — 3 nodos
+#   3. Mongos         — router de queries
+#   4. Job mongo-init — inicializa replica sets y configura sharding
+#
+# FIX probes: tcpSocket en vez de exec con mongosh (quoting issues)
+# FIX Job: usa mongosh en loop en vez de nc (nc no existe en mongo:7)
+
+# ── Config Server ─────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: configsvr
+  namespace: restaurantes
+  labels:
+    app: configsvr
+spec:
+  serviceName: configsvr-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      app: configsvr
+  template:
+    metadata:
+      labels:
+        app: configsvr
+    spec:
+      containers:
+        - name: configsvr
+          image: mongo:7
+          command:
+            - mongod
+            - "--configsvr"
+            - "--replSet"
+            - "configReplSet"
+            - "--bind_ip_all"
+            - "--port"
+            - "27019"
+            - "--wiredTigerCacheSizeGB"
+            - "0.25"
+          ports:
+            - containerPort: 27019
+          volumeMounts:
+            - name: configsvr-data
+              mountPath: /data/configdb
+          readinessProbe:
+            tcpSocket:
+              port: 27019
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket:
+              port: 27019
+            initialDelaySeconds: 40
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu:    "100m"
+              memory: "256Mi"
+            limits:
+              cpu:    "500m"
+              memory: "256Mi"
+  volumeClaimTemplates:
+    - metadata:
+        name: configsvr-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: configsvr-headless
+  namespace: restaurantes
+spec:
+  clusterIP: None
+  selector:
+    app: configsvr
+  ports:
+    - port: 27019
+      targetPort: 27019
+---
+# ── Shard rs0 ─────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: shard
+  namespace: restaurantes
+  labels:
+    app: shard
+spec:
+  serviceName: shard-headless
+  replicas: 3
+  selector:
+    matchLabels:
+      app: shard
+  template:
+    metadata:
+      labels:
+        app: shard
+    spec:
+      containers:
+        - name: shard
+          image: mongo:7
+          command:
+            - mongod
+            - "--shardsvr"
+            - "--replSet"
+            - "rs0"
+            - "--bind_ip_all"
+            - "--port"
+            - "27018"
+            - "--wiredTigerCacheSizeGB"
+            - "0.25"
+          ports:
+            - containerPort: 27018
+          volumeMounts:
+            - name: shard-data
+              mountPath: /data/db
+          readinessProbe:
+            tcpSocket:
+              port: 27018
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket:
+              port: 27018
+            initialDelaySeconds: 40
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu:    "100m"
+              memory: "384Mi"
+            limits:
+              cpu:    "500m"
+              memory: "384Mi"
+  volumeClaimTemplates:
+    - metadata:
+        name: shard-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 3Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shard-headless
+  namespace: restaurantes
+spec:
+  clusterIP: None
+  selector:
+    app: shard
+  ports:
+    - port: 27018
+      targetPort: 27018
+---
+# ── Mongos — router ───────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongos
+  namespace: restaurantes
+  labels:
+    app: mongos
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongos
+  template:
+    metadata:
+      labels:
+        app: mongos
+    spec:
+      initContainers:
+        - name: wait-configsvr-primary
+          image: mongo:7
+          command:
+            - bash
+            - "-c"
+            - |
+              NS="restaurantes.svc.cluster.local"
+              CONFIGSVR="configsvr-0.configsvr-headless.${NS}:27019"
+              echo "Esperando primario en configReplSet..."
+              until mongosh --host "${CONFIGSVR}" \
+                --eval "rs.isMaster().ismaster" --quiet 2>/dev/null | grep -q "true"; do
+                echo "Sin primario aún, reintentando en 5s..."
+                sleep 5
+              done
+              echo "Primario encontrado, arrancando mongos"
+      containers:
+        - name: mongos
+          image: mongo:7
+          command:
+            - mongos
+            - "--configdb"
+            - "configReplSet/configsvr-0.configsvr-headless.restaurantes.svc.cluster.local:27019"
+            - "--bind_ip_all"
+            - "--port"
+            - "27017"
+          ports:
+            - containerPort: 27017
+          readinessProbe:
+            tcpSocket:
+              port: 27017
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            tcpSocket:
+              port: 27017
+            initialDelaySeconds: 60
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu:    "100m"
+              memory: "400Mi"
+            limits:
+              cpu:    "500m"
+              memory: "400Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongos-service
+  namespace: restaurantes
+spec:
+  selector:
+    app: mongos
+  ports:
+    - protocol: TCP
+      port:       27017
+      targetPort: 27017
+  type: ClusterIP
+---
+# ── Job de inicialización ─────────────────────────────────────────
+# FIX: usa mongosh en loop para esperar (nc no existe en mongo:7)
+# Cada función de espera intenta el ping y reintenta si falla,
+# sin depender de herramientas externas.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mongo-init
+  namespace: restaurantes
+spec:
+  backoffLimit: 5
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mongo-init
+          image: mongo:7
+          command:
+            - bash
+            - "-c"
+            - |
+              set -e
+              NS="restaurantes.svc.cluster.local"
+              CONFIGSVR="configsvr-0.configsvr-headless.${NS}:27019"
+              SHARD0="shard-0.shard-headless.${NS}:27018"
+              SHARD1="shard-1.shard-headless.${NS}:27018"
+              SHARD2="shard-2.shard-headless.${NS}:27018"
+              MONGOS="mongos-service.${NS}:27017"
+
+              # Función de espera usando mongosh directamente
+              wait_for() {
+                local HOST=$1
+                local PORT=$2
+                local NAME=$3
+                echo "=== Esperando ${NAME} en ${HOST}:${PORT} ==="
+                until mongosh --host "${HOST}" --port "${PORT}" \
+                  --eval "db.adminCommand({ping:1})" --quiet 2>/dev/null | grep -q "ok"; do
+                  echo "${NAME} no listo, reintentando en 5s..."
+                  sleep 5
+                done
+                echo "${NAME} OK"
+              }
+
+              wait_for "configsvr-0.configsvr-headless.${NS}" 27019 "configsvr"
+              wait_for "shard-0.shard-headless.${NS}" 27018 "shard-0"
+              wait_for "shard-1.shard-headless.${NS}" 27018 "shard-1"
+              wait_for "shard-2.shard-headless.${NS}" 27018 "shard-2"
+
+              echo "=== 1. Init configReplSet ==="
+              mongosh --host "${CONFIGSVR}" --eval "
+                var result = rs.status();
+                if (result.ok === 1 && result.myState !== undefined) {
+                  print('configReplSet ya inicializado');
+                } else {
+                  rs.initiate({
+                    _id: 'configReplSet',
+                    configsvr: true,
+                    members: [{ _id: 0, host: '${CONFIGSVR}' }]
+                  });
+                  print('configReplSet iniciado');
+                }
+              " 2>/dev/null || echo "configReplSet: ya existia o error ignorado"
+              sleep 15
+
+              echo "=== 2. Init shard rs0 ==="
+              mongosh --host "${SHARD0}" --eval "
+                var result = rs.status();
+                if (result.ok === 1 && result.myState !== undefined) {
+                  print('rs0 ya inicializado');
+                } else {
+                  rs.initiate({
+                    _id: 'rs0',
+                    members: [
+                      { _id: 0, host: '${SHARD0}', priority: 2 },
+                      { _id: 1, host: '${SHARD1}', priority: 1 },
+                      { _id: 2, host: '${SHARD2}', priority: 1 }
+                    ]
+                  });
+                  print('rs0 iniciado');
+                }
+              " 2>/dev/null || echo "rs0: ya existia o error ignorado"
+              sleep 25
+
+              echo "=== Esperando mongos ==="
+              wait_for "mongos-service.${NS}" 27017 "mongos"
+
+              echo "=== 3. Registrar shard ==="
+              mongosh --host "${MONGOS}" --eval "
+                try {
+                  var r = sh.addShard('rs0/${SHARD0},${SHARD1},${SHARD2}');
+                  print('Shard registrado: ' + r.shardAdded);
+                } catch(e) { print('addShard (puede ya existir): ' + e.message); }
+              "
+
+              echo "=== 4. Habilitar sharding ==="
+              mongosh --host "${MONGOS}" --eval "
+                try { sh.enableSharding('restaurantdb'); } catch(e) { print('enableSharding: ' + e.message); }
+                try { sh.shardCollection('restaurantdb.pedidos',       { id_restaurante: 'hashed' }); } catch(e) { print('shardCollection pedidos: ' + e.message); }
+                try { sh.shardCollection('restaurantdb.reservaciones', { id_restaurante: 'hashed' }); } catch(e) { print('shardCollection reservaciones: ' + e.message); }
+                print('Sharding listo');
+              "
+
+              echo "=== mongo-init completado ==="

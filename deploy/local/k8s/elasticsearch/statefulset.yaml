@@ -1,0 +1,80 @@
+# elasticsearch/statefulset.yaml
+#
+# ElasticSearch usa StatefulSet (no Deployment) porque necesita
+# identidad estable de pod y almacenamiento persistente.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch
+  namespace: restaurantes
+  labels:
+    app: elasticsearch
+spec:
+  serviceName: elasticsearch-service
+  replicas: 1
+  selector:
+    matchLabels:
+      app: elasticsearch
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+    spec:
+      initContainers:
+        # ElasticSearch requiere vm.max_map_count >= 262144
+        - name: increase-vm-max-map
+          image: busybox
+          command: ["sysctl", "-w", "vm.max_map_count=262144"]
+          securityContext:
+            privileged: true
+      containers:
+        - name: elasticsearch
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
+          env:
+            - name:  discovery.type
+              value: single-node
+            - name:  xpack.security.enabled
+              value: "false"
+            - name:  ES_JAVA_OPTS
+              value: "-Xms512m -Xmx512m"
+          ports:
+            - containerPort: 9200
+              name: http
+          volumeMounts:
+            - name: es-data
+              mountPath: /usr/share/elasticsearch/data
+          readinessProbe:
+            httpGet:
+              path: /_cluster/health
+              port: 9200
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu:    "200m"
+              memory: "768Mi"
+            limits:
+              cpu:    "1000m"
+              memory: "1.5Gi"
+  volumeClaimTemplates:
+    - metadata:
+        name: es-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch-service
+  namespace: restaurantes
+spec:
+  selector:
+    app: elasticsearch
+  ports:
+    - protocol: TCP
+      port:       9200
+      targetPort: 9200
+  type: ClusterIP

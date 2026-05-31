@@ -1,0 +1,32 @@
+# api/hpa.yaml
+#
+# Escala automáticamente el API entre 2 y 10 réplicas
+# según uso de CPU. Requiere metrics-server instalado en el cluster.
+#
+# Instalar metrics-server (si no está):
+#   kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api-hpa
+  namespace: restaurantes
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type:               Utilization
+          averageUtilization: 70   # Escala cuando CPU supera 70%
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type:               Utilization
+          averageUtilization: 80

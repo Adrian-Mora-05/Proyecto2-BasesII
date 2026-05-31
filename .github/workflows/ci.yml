@@ -1,0 +1,141 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  
+  # ============================================================
+  # JOB 1 — Pruebas unitarias
+  # ============================================================
+  unit-tests:
+    name: Pruebas Unitarias
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: api/package-lock.json
+
+      - name: Instalar dependencias
+        working-directory: api
+        run: npm install
+
+      - name: Correr pruebas unitarias
+        working-directory: api
+        run: node --experimental-vm-modules node_modules/jest/bin/jest.js --testPathPattern="tests/unit/" --coverage
+        env:
+          DB_ENGINE: postgres
+          KEYCLOAK_URL: http://localhost:8080
+
+  # ============================================================
+  # JOB 2 — Pruebas de integración
+  # ============================================================
+  integration-tests:
+    name: Pruebas de Integración
+    runs-on: ubuntu-latest
+    needs: unit-tests
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: admin
+          POSTGRES_PASSWORD: admin123
+          POSTGRES_DB: restaurantdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: api/package-lock.json
+
+      - name: Instalar dependencias
+        working-directory: api
+        run: npm install
+
+      - name: Instalar psql
+        run: sudo apt-get install -y postgresql-client
+
+      - name: Inicializar base de datos
+        run: |
+          psql -h localhost -U admin -d restaurantdb -f db/postgres/init/01_schema.sql
+          psql -h localhost -U admin -d restaurantdb -f db/postgres/init/02_tablas.sql
+          psql -h localhost -U admin -d restaurantdb -f db/postgres/init/03_funciones.sql
+          psql -h localhost -U admin -d restaurantdb -f db/postgres/init/04_seed.sql
+        env:
+          PGPASSWORD: admin123
+
+      - name: Correr pruebas de integración
+        working-directory: api
+        run: node --experimental-vm-modules node_modules/jest/bin/jest.js --testPathPattern="tests/integration/"
+        env:
+          DB_ENGINE: postgres
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USER: admin
+          DB_PASSWORD: admin123
+          DB_NAME: restaurantdb
+          KEYCLOAK_URL: http://localhost:8080
+          REDIS_URL: redis://localhost:6379
+  # ============================================================
+  # JOB 3 — Build y Push Docker
+  # ============================================================
+  build-and-push:
+    name: Build y Push Docker
+    runs-on: ubuntu-latest
+    needs: integration-tests
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Login a GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build y Push imagen
+        uses: docker/build-push-action@v5
+        with:
+          context: ./api
+          push: true
+          tags: |
+            ghcr.io/adrian-mora-05/tareacorta1-basesii:latest
+            ghcr.io/adrian-mora-05/tareacorta1-basesii:${{ github.sha }}
