@@ -60,7 +60,7 @@ services:
 
       KC_IMPORT: /opt/keycloak/data/import/realm-export.json
     volumes:
-      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
+      - ./deploy/local/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
     command: ["start-dev", "--import-realm"]
     ports:
       - "8080:8080"

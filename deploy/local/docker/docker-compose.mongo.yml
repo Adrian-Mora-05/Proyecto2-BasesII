@@ -1,9 +1,7 @@
 services:
 
   # ════════════════════════════════════════════════════════════════
-  #  CONFIG SERVERS — guardan los metadatos del cluster sharded
-  #  (qué chunks están en qué shard)
-  #  Se despliegan como replica set propio llamado 'configReplSet'
+  #  CONFIG SERVERS
   # ════════════════════════════════════════════════════════════════
   configsvr1:
     image: mongo:7
@@ -16,7 +14,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
- 
+
   configsvr2:
     image: mongo:7
     container_name: configsvr2
@@ -28,7 +26,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
- 
+
   configsvr3:
     image: mongo:7
     container_name: configsvr3
@@ -42,9 +40,7 @@ services:
       retries: 10
 
   # ════════════════════════════════════════════════════════════════
-  #  SHARD 1 — Replica set rs0 (1 primario + 2 secundarios)
-  #  Aquí viven los datos particionados de pedidos y reservaciones.
-  #  El enunciado pide al menos 1 shard — este es el shard1.
+  #  SHARD 1
   # ════════════════════════════════════════════════════════════════
   shard1-primary:
     image: mongo:7
@@ -57,7 +53,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
- 
+
   shard1-secondary1:
     image: mongo:7
     container_name: shard1-secondary1
@@ -69,7 +65,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
- 
+
   shard1-secondary2:
     image: mongo:7
     container_name: shard1-secondary2
@@ -81,11 +77,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
- 
+
   # ════════════════════════════════════════════════════════════════
   #  MONGOS — Router de queries
-  #  La API y el search service se conectan SOLO a mongos.
-  #  Mongos decide a qué shard enviar cada operación según la shard key.
   # ════════════════════════════════════════════════════════════════
   mongos:
     image: mongo:7
@@ -106,10 +100,8 @@ services:
       timeout: 5s
       retries: 10
 
-
   # ════════════════════════════════════════════════════════════════
-  #  INIT JOB — inicializa configsvr, shard rs0 y configura sharding
-  #  Corre una sola vez y termina (restart: "no")
+  #  INIT JOB
   # ════════════════════════════════════════════════════════════════
   mongo-init:
     image: mongo:7
@@ -130,7 +122,7 @@ services:
     entrypoint: >
       bash -c "
         set -e
- 
+
         echo '=== 1. Inicializando Config Server Replica Set ===' &&
         mongosh --host configsvr1:27017 --eval '
           rs.initiate({
@@ -144,7 +136,7 @@ services:
           })
         ' &&
         sleep 5 &&
- 
+
         echo '=== 2. Inicializando Shard rs0 ===' &&
         mongosh --host shard1-primary:27017 --eval '
           rs.initiate({
@@ -157,41 +149,34 @@ services:
           })
         ' &&
         sleep 10 &&
- 
-        echo '=== 3. Iniciando mongos temporalmente para configurar sharding ===' &&
+
+        echo '=== 3. Iniciando mongos temporalmente ===' &&
         mongos --configdb configReplSet/configsvr1:27017,configsvr2:27017,configsvr3:27017 --port 27020 --fork --logpath /tmp/mongos.log &&
         sleep 5 &&
- 
-        echo '=== 4. Registrando el shard en mongos ===' &&
+
+        echo '=== 4. Registrando el shard ===' &&
         mongosh --port 27020 --eval '
           sh.addShard(\"rs0/shard1-primary:27017,shard1-secondary1:27017,shard1-secondary2:27017\")
         ' &&
- 
-        echo '=== 5. Habilitando sharding en la base de datos ===' &&
+
+        echo '=== 5. Habilitando sharding ===' &&
         mongosh --port 27020 --eval '
           sh.enableSharding(\"restaurantdb\")
         ' &&
- 
-        echo '=== 6. Configurando shard keys en colecciones clave ===' &&
+
+        echo '=== 6. Configurando shard keys ===' &&
         mongosh --port 27020 --eval '
-          // Pedidos particionados por restaurante (hashed = distribución uniforme)
           sh.shardCollection(\"restaurantdb.pedidos\", { id_restaurante: \"hashed\" });
- 
-          // Reservaciones particionadas por restaurante
           sh.shardCollection(\"restaurantdb.reservaciones\", { id_restaurante: \"hashed\" });
- 
-          // Índices de soporte para queries frecuentes
           db.getSiblingDB(\"restaurantdb\").pedidos.createIndex({ id_restaurante: 1, createdAt: -1 });
           db.getSiblingDB(\"restaurantdb\").reservaciones.createIndex({ id_restaurante: 1, fecha: 1 });
           db.getSiblingDB(\"restaurantdb\").menus.createIndex({ id_restaurante: 1 });
- 
           print(\"Sharding configurado correctamente\");
         ' &&
- 
+
         echo '=== mongo-init completado ==='
       "
     restart: "no"
-
 
   # ── Keycloak ──────────────────────────────────────────────────────
   keycloak:
@@ -205,9 +190,10 @@ services:
       KC_HOSTNAME: ${KC_HOSTNAME:-localhost}
       KC_HOSTNAME_PORT: ${KC_HOSTNAME_PORT:-8080}
       KC_HOSTNAME_STRICT: ${KC_HOSTNAME_STRICT:-"false"}
-      KC_HEALTH_ENABLED: "true" 
+      KC_HEALTH_ENABLED: "true"
     volumes:
-    - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
+      # keycloak/ está dentro de deploy/local/
+      - ./deploy/local/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
     command: ["start-dev", "--import-realm"]
     ports:
       - "8080:8080"
@@ -227,11 +213,9 @@ services:
     command: >
       redis-server
       --maxmemory 256mb
-      --maxmemory-policy allkeys-lru 
+      --maxmemory-policy allkeys-lru
     volumes:
-      # Persiste los datos de Redis aunque el contenedor se reinicie
       - redis_data:/data
-
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -257,11 +241,9 @@ services:
       retries: 10
       start_period: 30s
 
-  # ── API principal (escalable horizontalmente) ─────────────────────
-  # Para escalar: docker compose -f docker-compose.mongo.yml up --scale api=3
+  # ── API principal ─────────────────────────────────────────────────
   api:
     build: ./api
-    # container_name: api
     depends_on:
       mongos:
         condition: service_healthy
@@ -282,16 +264,10 @@ services:
       KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-api-restaurant-secret}
       KEYCLOAK_ADMIN_CLIENT_ID: ${KEYCLOAK_ADMIN_CLIENT_ID:-admin-cli}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      
-    # Sin ports aquí: Nginx es el punto de entrada, no la API directamente
-    #ports:
-     # - "3000:3000"
- 
-  # ── Microservicio de búsqueda ElasticSearch ───────────────────────
-  # Para escalar: docker compose -f docker-compose.mongo.yml up --scale search=2
+
+  # ── Search service ────────────────────────────────────────────────
   search:
     build: ./search-service
-   # container_name: search
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -305,21 +281,18 @@ services:
       MONGO_URL: ${MONGO_URL:-mongodb://mongos:27017/}
       MONGO_DB: ${MONGO_DB:-restaurantdb}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-    # Sin ports: Nginx enruta /search/** aquí
-    # ports:
-     # - "4000:4000"
- 
-  # ── Nginx — Balanceador de carga ──────────────────────────────────
+
+  # ── Nginx ─────────────────────────────────────────────────────────
   nginx:
     image: nginx:alpine
-   # container_name: nginx
     depends_on:
       - api
       - search
     ports:
       - "80:80"
     volumes:
-      - ./nginx/nginx.mongo.conf:/etc/nginx/nginx.conf:ro
+      # nginx/ está dentro de deploy/local/
+      - ./deploy/local/nginx/nginx.mongo.conf:/etc/nginx/nginx.conf:ro
 
 volumes:
   configsvr1_data:

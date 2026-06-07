@@ -12,7 +12,8 @@ services:
       - "5435:5432"
     volumes:
       - pgdata_api:/var/lib/postgresql/data
-      - ./db/init:/docker-entrypoint-initdb.d
+      # db/ está en la raíz del proyecto
+      - ./db/postgres/init:/docker-entrypoint-initdb.d
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${RESTAURANT_DB}"]
       interval: 10s
@@ -51,15 +52,15 @@ services:
       KC_DB_URL: jdbc:postgresql://db_keycloak:5432/${KEYCLOAK_DB}
       KC_DB_USERNAME: ${POSTGRES_USER}
       KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
-      KC_HOSTNAME: localhost          
-      KC_HOSTNAME_PORT: 8080          
-      KC_HOSTNAME_STRICT: "false"       
-      KC_HTTP_ENABLED: "true"      
-      KC_HEALTH_ENABLED: "true"     
-
+      KC_HOSTNAME: localhost
+      KC_HOSTNAME_PORT: 8080
+      KC_HOSTNAME_STRICT: "false"
+      KC_HTTP_ENABLED: "true"
+      KC_HEALTH_ENABLED: "true"
       KC_IMPORT: /opt/keycloak/data/import/realm-export.json
     volumes:
-      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json  
+      # keycloak/ está dentro de deploy/local/
+      - ./deploy/local/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
     command: ["start-dev", "--import-realm"]
     ports:
       - "8080:8080"
@@ -79,11 +80,9 @@ services:
     command: >
       redis-server
       --maxmemory 256mb
-      --maxmemory-policy allkeys-lru 
+      --maxmemory-policy allkeys-lru
     volumes:
-      # Persiste los datos de Redis aunque el contenedor se reinicie
       - redis_data:/data
-
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -112,8 +111,8 @@ services:
   # ── API principal (escalable horizontalmente) ─────────────────────
   # Para escalar: docker compose -f docker-compose.postgres.yml up --scale api=3
   api:
+    # api/ está en la raíz del proyecto
     build: ./api
-    # container_name: api
     depends_on:
       db_api:
         condition: service_healthy
@@ -137,15 +136,12 @@ services:
       KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET:-api-restaurant-secret}
       KEYCLOAK_ADMIN_CLIENT_ID: ${KEYCLOAK_ADMIN_CLIENT_ID:-admin-cli}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-      # Sin ports: Nginx es el punto de entrada
-   # ports:
-   #   - "3000:3000"
 
   # ── Microservicio de búsqueda ElasticSearch ───────────────────────
   # Para escalar: docker compose -f docker-compose.postgres.yml up --scale search=2
   search:
+    # search-service/ está en la raíz del proyecto
     build: ./search-service
-   # container_name: search
     depends_on:
       elasticsearch:
         condition: service_healthy
@@ -162,21 +158,18 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD}
       DB_NAME: ${RESTAURANT_DB}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
-    # Sin ports: Nginx enruta /search/** aquí
-    # ports:
-    #   - "4000:4000"
 
   # ── Nginx — Balanceador de carga ──────────────────────────────────
   nginx:
     image: nginx:alpine
-   # container_name: nginx
     depends_on:
       - api
       - search
     ports:
       - "80:80"
     volumes:
-      - ./nginx/nginx.postgres.conf:/etc/nginx/nginx.conf:ro
+      # nginx/ está dentro de deploy/local/
+      - ./deploy/local/nginx/nginx.postgres.conf:/etc/nginx/nginx.conf:ro
     healthcheck:
       test: ["CMD", "nginx", "-t"]
       interval: 10s
@@ -187,4 +180,4 @@ volumes:
   pgdata_api:
   pgdata_keycloak:
   redis_data:
-  es_data: 
+  es_data:

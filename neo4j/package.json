@@ -1,0 +1,15 @@
+{
+  "name": "neo4j-migrate",
+  "version": "1.0.0",
+  "description": "Script de migración de datos a Neo4J",
+  "main": "migrate.js",
+  "type": "module",
+  "scripts": {
+    "start": "node migrate.js"
+  },
+  "dependencies": {
+    "neo4j-driver": "^5.18.0",
+    "pg": "^8.11.0",
+    "mongodb": "^6.3.0"
+  }
+}
