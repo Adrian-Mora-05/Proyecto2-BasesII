@@ -102,10 +102,18 @@ if ($Engine -eq "mongodb") {
     Write-Host "MongoDB listo." -ForegroundColor Green
 } 
 else {
+    Write-Host "`nGenerando ConfigMap PostgreSQL..." -ForegroundColor Yellow
+
+    Push-Location "$BASE_PATH/postgres"
+    .\generate-configmap.ps1
+    Pop-Location
+
     Write-Host "`nDesplegando PostgreSQL..." -ForegroundColor Yellow
-    kubectl apply -f "$BASE_PATH/postgres/init-configmap.yaml" -n $NS
+
     kubectl apply -f "$BASE_PATH/postgres/statefulset.yaml" -n $NS
+
     kubectl wait --for=condition=ready pod -l app=postgres --timeout=120s -n $NS
+
     Write-Host "PostgreSQL listo." -ForegroundColor Green
 }
 

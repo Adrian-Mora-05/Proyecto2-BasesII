@@ -22,14 +22,16 @@ export class OrderDAOPostgres extends PostgresBaseDAO {
    *   id_restaurante: number,
    *   descripcion: string,
    *   tipo_pedido: string,
+   *   latitud_entrega: number,
+   *   longitud_entrega: number,
    *   platos: Array
    * }} data
    * @returns {Promise<{ id: number }>}
    */
-  async create({ id_usuario, id_restaurante, descripcion, tipo_pedido, platos }) {
+  async create({ id_usuario, id_restaurante, descripcion, tipo_pedido, latitud_entrega, longitud_entrega, platos }) {
     const result = await this._query(
-      'SELECT restaurant.realizar_pedido($1, $2, $3, $4, $5) AS id',
-      [id_usuario, id_restaurante, descripcion, tipo_pedido, JSON.stringify(platos)]
+      'SELECT restaurant.realizar_pedido($1, $2, $3, $4, $5, $6, $7) AS id',
+      [id_usuario, id_restaurante, descripcion, tipo_pedido, latitud_entrega, longitud_entrega, JSON.stringify(platos)]
     );
     const id = result.rows[0]?.id ?? result.rows[0]?.realizar_pedido;
     if (!id) throw new Error('No se pudo crear el pedido');

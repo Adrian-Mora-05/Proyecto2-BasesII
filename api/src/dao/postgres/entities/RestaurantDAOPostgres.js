@@ -13,13 +13,13 @@ export class RestaurantDAOPostgres extends PostgresBaseDAO {
   }
 
   /**
-   * @param {{ nombre: string, direccion: string, telefono: string }} data
+   * @param {{ nombre: string, direccion: string, telefono: string, latitud: number, longitud: number }} data
    * @returns {Promise<{ id: number }>}
    */
-  async create({ nombre, direccion, telefono }) {
+  async create({ nombre, direccion, telefono, latitud, longitud }) {
     const result = await this._query(
-      'SELECT restaurant.registrar_restaurante($1, $2, $3) AS id',
-      [nombre, direccion, telefono]
+      'SELECT restaurant.registrar_restaurante($1, $2, $3, $4, $5) AS id',
+      [nombre, direccion, telefono, latitud, longitud]
     );
     return result.rows[0];
   }

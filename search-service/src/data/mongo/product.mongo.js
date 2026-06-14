@@ -14,10 +14,11 @@ export class MongoProductRepository {
       return products.map(p => ({
         id: p._id.toString(),
         nombre: p.nombre,
-        categoria: p.categoria,
-        descripcion: p.descripcion,
+        categoria: p.categoria ?? 'Sin categoría',
+        descripcion: p.descripcion ?? 'Producto sin descripción',
         id_restaurante: p.id_restaurante,
         precio: p.precio,
+        id_menu: p.id_menu ?? null,
       }));
     } finally {
       await client.close();

@@ -10,7 +10,7 @@ export class OrderController {
 
   create = async (req, res) => {
     try {
-      const { id_restaurante, descripcion, id_tipo_pedido, platos } = req.body;
+      const { id_restaurante, descripcion, id_tipo_pedido, latitud_entrega, longitud_entrega, platos } = req.body;
 
       if (!id_restaurante || !id_tipo_pedido || !platos?.length) {
         return res.status(400).json({ error: 'Datos incompletos' });
@@ -23,6 +23,8 @@ export class OrderController {
         id_restaurante,
         descripcion,
         tipo_pedido: id_tipo_pedido,
+        latitud_entrega,
+        longitud_entrega,
         platos,
       });
 

@@ -13,13 +13,20 @@ export class RestaurantController {
 
   create = async (req, res) => {
     try {
-      const { nombre, direccion, telefono } = req.body;
+      const { nombre, direccion, telefono, latitud, longitud } = req.body;
 
       if (!nombre) {
         return res.status(400).json({ error: 'El nombre del restaurante es obligatorio' });
       }
 
-      const result = await this.service.create({ nombre, direccion, telefono });
+      if (latitud && (latitud < -90 || latitud > 90)) {
+        return res.status(400).json({ error: 'Latitud inválida' });
+      }
+
+      if (longitud && (longitud < -180 || longitud > 180)) {
+        return res.status(400).json({ error: 'Longitud inválida' });
+      }
+      const result = await this.service.create({ nombre, direccion, telefono, latitud, longitud });
       res.status(201).json({ message: 'Restaurante registrado correctamente', id: result.id });
     } catch (error) {
       res.status(500).json({ error: error.message });

@@ -62,7 +62,9 @@ $$;
 CREATE OR REPLACE FUNCTION restaurant.registrar_restaurante(
     p_nombre VARCHAR,
     p_direccion TEXT,
-    p_telefono VARCHAR
+    p_telefono VARCHAR,
+    p_latitud NUMERIC(10,7),
+    p_longitud NUMERIC(10,7)
 )
 RETURNS INT
 LANGUAGE plpgsql
@@ -70,8 +72,8 @@ AS $$
 DECLARE new_id INT;
 BEGIN
 
-INSERT INTO restaurant.restaurante (nombre, direccion, telefono)
-VALUES (p_nombre, p_direccion, p_telefono)
+INSERT INTO restaurant.restaurante (nombre, direccion, telefono, latitud, longitud)
+VALUES (p_nombre, p_direccion, p_telefono, p_latitud, p_longitud)
 RETURNING id INTO new_id;
 
 RETURN new_id;
@@ -86,14 +88,17 @@ RETURNS TABLE(
     id INT,
     nombre VARCHAR,
     direccion TEXT,
-    telefono VARCHAR
+    telefono VARCHAR,
+    latitud NUMERIC,
+    longitud NUMERIC
+)
 )
 LANGUAGE plpgsql
 AS $$
 BEGIN
 
 RETURN QUERY
-SELECT r.id,r.nombre,r.direccion,r.telefono
+SELECT r.id,r.nombre,r.direccion,r.telefono, r.latitud,r.longitud
 FROM restaurant.restaurante r;
 
 END;
@@ -255,6 +260,8 @@ CREATE OR REPLACE FUNCTION restaurant.realizar_pedido(
     p_id_restaurante INT,
     p_descripcion TEXT,
     p_tipo_pedido INT,
+    p_latitud_entrega NUMERIC(10,7),
+    p_longitud_entrega NUMERIC(10,7),
     p_platos JSON
 )
 RETURNS INT
@@ -276,6 +283,8 @@ INSERT INTO restaurant.pedido(
     id_restaurante,
     descripcion,
     precio_total,
+    latitud_entrega,
+    longitud_entrega,
     id_estado_pedido,
     id_tipo_pedido
 )
@@ -284,6 +293,8 @@ VALUES(
     p_id_restaurante,
     p_descripcion,
     0,
+    p_latitud_entrega,
+    p_longitud_entrega,
     1,
     p_tipo_pedido
 )
@@ -341,6 +352,9 @@ RETURNS TABLE(
     restaurante INT,
     descripcion TEXT,
     precio_total NUMERIC,
+    fecha_hora TIMESTAMP,
+    latitud_entrega NUMERIC(10,7),
+    longitud_entrega NUMERIC(10,7),
     estado INT,
     tipo INT
 )
@@ -354,6 +368,9 @@ SELECT p.id,
        p.id_restaurante,
        p.descripcion,
        p.precio_total,
+       p.fecha_hora, 
+       p.latitud_entrega,
+       p.longitud_entrega,
        p.id_estado_pedido,
        p.id_tipo_pedido
 FROM restaurant.pedido p

@@ -26,7 +26,9 @@ CREATE TABLE IF NOT EXISTS restaurante (
     id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     nombre VARCHAR(150) NOT NULL,
     direccion TEXT,
-    telefono VARCHAR(20)
+    telefono VARCHAR(20),
+    latitud NUMERIC(10,7) CHECK (latitud BETWEEN -90 AND 90),
+    longitud NUMERIC(10,7) CHECK (longitud BETWEEN -180 AND 180)
 );
 
 CREATE TABLE IF NOT EXISTS usuario (
@@ -35,6 +37,7 @@ CREATE TABLE IF NOT EXISTS usuario (
     nombre VARCHAR(100) NOT NULL,
     correo VARCHAR(150) UNIQUE NOT NULL,
     id_rol_usuario INT NOT NULL,
+
     FOREIGN KEY (id_rol_usuario)
         REFERENCES rol_usuario(id)
 );
@@ -44,12 +47,14 @@ CREATE TABLE IF NOT EXISTS mesa (
     id_restaurante INT NOT NULL,
     num_mesa INT NOT NULL,
     capacidad INT NOT NULL,
+
     FOREIGN KEY (id_restaurante)
         REFERENCES restaurante(id)
         ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_mesa_restaurante ON mesa(id_restaurante);
+CREATE INDEX IF NOT EXISTS idx_mesa_restaurante
+    ON mesa(id_restaurante);
 
 CREATE TABLE IF NOT EXISTS reservacion (
     id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -88,7 +93,14 @@ CREATE TABLE IF NOT EXISTS menu (
         ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_menu_restaurante ON menu(id_restaurante);
+CREATE INDEX IF NOT EXISTS idx_menu_restaurante
+    ON menu(id_restaurante);
+
+-- Catálogo de categorías de platos
+CREATE TABLE IF NOT EXISTS categoria_plato (
+    id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    nombre VARCHAR(100) NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS plato (
     id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -96,11 +108,14 @@ CREATE TABLE IF NOT EXISTS plato (
     nombre VARCHAR(150) NOT NULL,
     precio NUMERIC(10,2) NOT NULL,
     descripcion TEXT,
-    categoria VARCHAR(100),
+    id_categoria INT, 
 
     FOREIGN KEY (id_menu)
         REFERENCES menu(id)
-        ON DELETE CASCADE
+        ON DELETE CASCADE,
+
+    FOREIGN KEY (id_categoria)
+        REFERENCES categoria_plato(id)
 );
 
 CREATE TABLE IF NOT EXISTS pedido (
@@ -109,6 +124,10 @@ CREATE TABLE IF NOT EXISTS pedido (
     id_restaurante INT NOT NULL,
     descripcion TEXT,
     precio_total NUMERIC(10,2),
+    fecha_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    fecha DATE GENERATED ALWAYS AS (fecha_hora::date) STORED,
+    latitud_entrega NUMERIC(10,7) CHECK (latitud_entrega BETWEEN -90 AND 90),
+    longitud_entrega NUMERIC(10,7) CHECK (longitud_entrega BETWEEN -180 AND 180),
     id_estado_pedido INT NOT NULL,
     id_tipo_pedido INT NOT NULL,
 

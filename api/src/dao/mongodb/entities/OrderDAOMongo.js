@@ -29,7 +29,8 @@ export class OrderDAOMongo extends MongoBaseDAO {
    * }} data
    * @returns {Promise<Object>}
    */
-  async create({ id_usuario, id_restaurante, descripcion, tipo_pedido, precio_total, platos }) {
+  async create({ id_usuario, id_restaurante, descripcion, tipo_pedido, 
+                precio_total, platos, latitud_entrega, longitud_entrega }) {
     return super.create({
       id_usuario,
       id_restaurante,
@@ -37,7 +38,9 @@ export class OrderDAOMongo extends MongoBaseDAO {
       tipo_pedido,
       precio_total,
       estado: 'pendiente',
-      platos,
+      platos, // [{ id_plato, nombre, categoria, cantidad, subtotal }]
+      latitud_entrega: latitud_entrega ?? null,
+      longitud_entrega: longitud_entrega ?? null,
       createdAt: new Date(),
     });
   }

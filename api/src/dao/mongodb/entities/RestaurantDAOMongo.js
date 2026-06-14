@@ -18,11 +18,13 @@ export class RestaurantDAOMongo extends MongoBaseDAO {
    * @param {{ nombre: string, direccion: string, telefono: string }} data
    * @returns {Promise<Object>}
    */
-  async create({ nombre, direccion, telefono }) {
+  async create({ nombre, direccion, telefono, latitud, longitud }) {
     return super.create({
       nombre,
       direccion,
       telefono,
+      latitud: latitud ?? null,
+      longitud: longitud ?? null,
       createdAt: new Date(),
     });
   }

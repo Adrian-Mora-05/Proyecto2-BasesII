@@ -27,11 +27,13 @@ export class OrderService {
    *   id_restaurante: string|number,
    *   descripcion: string,
    *   tipo_pedido: string,
+   *   latitud_entrega: number,
+   *   longitud_entrega: number,
    *   platos: Array<{ id_plato: string|number, cantidad: number }>
    * }} data
    * @returns {Promise<{ id: string|number }>}
    */
-  async create({ keycloakId, id_restaurante, descripcion, tipo_pedido, platos }) {
+  async create({ keycloakId, id_restaurante, descripcion, tipo_pedido, latitud_entrega, longitud_entrega, platos }) {
     // 1. Resolver usuario local
     const usuario = await this.userDAO.findByExternalId(keycloakId);
     if (!usuario) throw new Error('Usuario no encontrado en base de datos');
@@ -46,6 +48,8 @@ export class OrderService {
       id_restaurante,
       descripcion,
       tipo_pedido,
+      latitud_entrega,
+      longitud_entrega,
       platos,
     });
   }
