@@ -1,0 +1,27 @@
+# deploy/local/k8s/hive/hive-configmap.yaml
+#
+# Genera el ConfigMap con los .hql desde PowerShell:
+#
+#   kubectl create configmap hive-ddl-configmap `
+#     --from-file=01_star_schema.hql=analytics/hive/ddl/01_star_schema.hql `
+#     --from-file=02_vistas_olap.hql=analytics/hive/ddl/02_vistas_olap.hql `
+#     -n restaurant --dry-run=client -o yaml > `
+#     deploy/local/k8s/hive/hive-configmap.yaml
+#
+# Ejecutá ese comando desde la raíz del proyecto cada vez
+# que modifiques los .hql. El archivo resultante reemplaza
+# este placeholder.
+#
+# Por ahora este archivo documenta cómo generarlo.
+# No aplicar este archivo directamente — usar el generado.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: hive-ddl-configmap
+  namespace: restaurant
+data:
+  # Contenido inyectado por el comando kubectl create configmap arriba
+  01_star_schema.hql: |
+    -- placeholder: regenerar con el comando de arriba
+  02_vistas_olap.hql: |
+    -- placeholder: regenerar con el comando de arriba

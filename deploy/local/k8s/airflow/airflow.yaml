@@ -1,0 +1,260 @@
+# deploy/local/k8s/airflow/airflow.yaml
+#
+# Incluye:
+#   - airflow-db (Postgres interno)
+#   - airflow-init (Job de migración + creación de admin)
+#   - airflow-webserver (Deployment + Service NodePort)
+#   - airflow-scheduler (Deployment)
+#   - ConfigMap de variables de entorno comunes
+# ============================================================
+
+# ------------------------------------------------------------
+#  ConfigMap de variables comunes de Airflow
+#  Los valores sensibles van en secrets.yaml (ya existe)
+# ------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: airflow-env
+  namespace: restaurant
+data:
+  AIRFLOW__CORE__EXECUTOR:          "LocalExecutor"
+  AIRFLOW__CORE__LOAD_EXAMPLES:     "false"
+  AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://airflow:airflow@airflow-db:5432/airflow"
+
+  # Motor de BD del OLTP — leer del Secret si querés ocultarlo
+  DB_ENGINE:   "postgres"           # cambiar a "mongo" según necesidad
+
+  # PostgreSQL OLTP — nombre de servicio dentro del namespace
+  DB_HOST:     "postgres-service"   # ajustar al nombre del Service de tu StatefulSet de Postgres
+  DB_PORT:     "5432"
+  DB_NAME:     "restaurantdb"
+
+  # MongoDB OLTP
+  MONGO_URL:   "mongodb://mongo-0.mongo:27017,mongo-1.mongo:27017,mongo-2.mongo:27017/?replicaSet=rs0"
+  MONGO_DB:    "restaurantdb"
+
+  # Hive y Spark
+  HIVE_HOST:        "hive-server"
+  HIVE_PORT:        "10000"
+  HIVE_DB:          "restaurant_dw"
+  SPARK_MASTER_URL: "spark://spark-master:7077"
+---
+# ------------------------------------------------------------
+#  Airflow DB (Postgres interno)
+# ------------------------------------------------------------
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: airflow-db
+  namespace: restaurant
+spec:
+  serviceName: airflow-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow-db
+  template:
+    metadata:
+      labels:
+        app: airflow-db
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          env:
+            - name: POSTGRES_DB
+              value: airflow
+            - name: POSTGRES_USER
+              value: airflow
+            - name: POSTGRES_PASSWORD
+              value: airflow
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "airflow"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow-db
+  namespace: restaurant
+spec:
+  clusterIP: None
+  selector:
+    app: airflow-db
+  ports:
+    - port: 5432
+---
+# ------------------------------------------------------------
+#  Airflow Init — Job (corre una vez)
+# ------------------------------------------------------------
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: airflow-init
+  namespace: restaurant
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: airflow-init
+          image: apache/airflow:2.9.1
+          envFrom:
+            - configMapRef:
+                name: airflow-env
+            - secretRef:
+                name: restaurant-secrets   # DB_USER, DB_PASSWORD del secrets.yaml existente
+          command:
+            - /bin/bash
+            - -c
+            - |
+              pip install pyhive thrift thrift-sasl psycopg2-binary pymongo apache-airflow-providers-apache-spark &&
+              airflow db migrate &&
+              airflow users create \
+                --username admin --password admin \
+                --firstname Admin --lastname User \
+                --role Admin --email admin@restaurant.local || true
+          volumeMounts:
+            - name: dags
+              mountPath: /opt/airflow/dags
+      volumes:
+        - name: dags
+          configMap:
+            name: airflow-dags-configmap   # generado igual que hive-configmap
+---
+# ------------------------------------------------------------
+#  Airflow Webserver
+# ------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-webserver
+  namespace: restaurant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow-webserver
+  template:
+    metadata:
+      labels:
+        app: airflow-webserver
+    spec:
+      containers:
+        - name: airflow-webserver
+          image: apache/airflow:2.9.1
+          command: ["airflow", "webserver"]
+          envFrom:
+            - configMapRef:
+                name: airflow-env
+            - secretRef:
+                name: restaurant-secrets
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          volumeMounts:
+            - name: dags
+              mountPath: /opt/airflow/dags
+            - name: spark-jobs
+              mountPath: /opt/airflow/spark_jobs
+            - name: etl
+              mountPath: /opt/airflow/etl
+            - name: logs
+              mountPath: /opt/airflow/logs
+      volumes:
+        - name: dags
+          configMap:
+            name: airflow-dags-configmap
+        - name: spark-jobs
+          configMap:
+            name: spark-jobs-configmap
+        - name: etl
+          configMap:
+            name: airflow-etl-configmap
+        - name: logs
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow-webserver
+  namespace: restaurant
+spec:
+  selector:
+    app: airflow-webserver
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 30090
+  type: NodePort
+---
+# ------------------------------------------------------------
+#  Airflow Scheduler
+# ------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow-scheduler
+  namespace: restaurant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow-scheduler
+  template:
+    metadata:
+      labels:
+        app: airflow-scheduler
+    spec:
+      containers:
+        - name: airflow-scheduler
+          image: apache/airflow:2.9.1
+          command: ["airflow", "scheduler"]
+          envFrom:
+            - configMapRef:
+                name: airflow-env
+            - secretRef:
+                name: restaurant-secrets
+          volumeMounts:
+            - name: dags
+              mountPath: /opt/airflow/dags
+            - name: spark-jobs
+              mountPath: /opt/airflow/spark_jobs
+            - name: etl
+              mountPath: /opt/airflow/etl
+            - name: logs
+              mountPath: /opt/airflow/logs
+      volumes:
+        - name: dags
+          configMap:
+            name: airflow-dags-configmap
+        - name: spark-jobs
+          configMap:
+            name: spark-jobs-configmap
+        - name: etl
+          configMap:
+            name: airflow-etl-configmap
+        - name: logs
+          emptyDir: {}

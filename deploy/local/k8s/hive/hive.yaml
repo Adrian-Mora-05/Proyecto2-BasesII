@@ -1,0 +1,146 @@
+# deploy/local/k8s/hive/hive.yaml
+# PVC compartido para los archivos ORC del warehouse
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: hive-warehouse-pvc
+  namespace: restaurant
+spec:
+  accessModes: ["ReadWriteMany"]    # compartido entre metastore y hiveserver2
+  resources:
+    requests:
+      storage: 5Gi
+---
+# Hive Metastore
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hive-metastore
+  namespace: restaurant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hive-metastore
+  template:
+    metadata:
+      labels:
+        app: hive-metastore
+    spec:
+      containers:
+        - name: hive-metastore
+          image: apache/hive:4.0.0
+          env:
+            - name: SERVICE_NAME
+              value: metastore
+            - name: DB_DRIVER
+              value: postgres
+            - name: SERVICE_OPTS
+              value: >-
+                -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
+                -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://hive-metastore-db:5432/metastore
+                -Djavax.jdo.option.ConnectionUserName=hive
+                -Djavax.jdo.option.ConnectionPassword=hive
+          ports:
+            - containerPort: 9083
+          volumeMounts:
+            - name: warehouse
+              mountPath: /opt/hive/data/warehouse
+      volumes:
+        - name: warehouse
+          persistentVolumeClaim:
+            claimName: hive-warehouse-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hive-metastore
+  namespace: restaurant
+spec:
+  selector:
+    app: hive-metastore
+  ports:
+    - port: 9083
+      targetPort: 9083
+---
+# HiveServer2
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hive-server
+  namespace: restaurant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hive-server
+  template:
+    metadata:
+      labels:
+        app: hive-server
+    spec:
+      initContainers:
+        # Ejecuta los .hql del star schema al primer arranque
+        - name: hive-init
+          image: apache/hive:4.0.0
+          command:
+            - /bin/bash
+            - -c
+            - |
+              echo "Esperando HiveServer2..."; sleep 40;
+              beeline -u 'jdbc:hive2://localhost:10000' -f /hive-init/01_star_schema.hql &&
+              beeline -u 'jdbc:hive2://localhost:10000' -f /hive-init/02_vistas_olap.hql &&
+              echo "Schema OK."
+          volumeMounts:
+            - name: hive-ddl
+              mountPath: /hive-init
+            - name: warehouse
+              mountPath: /opt/hive/data/warehouse
+      containers:
+        - name: hive-server
+          image: apache/hive:4.0.0
+          env:
+            - name: SERVICE_NAME
+              value: hiveserver2
+            - name: SERVICE_OPTS
+              value: "-Dhive.metastore.uris=thrift://hive-metastore:9083"
+            - name: IS_RESUME
+              value: "true"
+          ports:
+            - containerPort: 10000   # Thrift
+              name: thrift
+            - containerPort: 10002   # Web UI
+              name: webui
+          volumeMounts:
+            - name: warehouse
+              mountPath: /opt/hive/data/warehouse
+          readinessProbe:
+            tcpSocket:
+              port: 10000
+            initialDelaySeconds: 60
+            periodSeconds: 15
+      volumes:
+        - name: warehouse
+          persistentVolumeClaim:
+            claimName: hive-warehouse-pvc
+        - name: hive-ddl
+          configMap:
+            name: hive-ddl-configmap   # ver hive-configmap.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hive-server
+  namespace: restaurant
+spec:
+  selector:
+    app: hive-server
+  ports:
+    - name: thrift
+      port: 10000
+      targetPort: 10000
+    - name: webui
+      port: 10002
+      targetPort: 10002
+      nodePort: 30002
+  type: NodePort

@@ -3,37 +3,35 @@
 #  Stack de Analytics — Etapa 3
 #  Proyecto: Reserva Inteligente de Restaurantes
 #
-#  Servicios:
-#    - Hive Metastore (PostgreSQL)
-#    - Hive Server2
-#    - Apache Spark (master + worker)
-#    - Apache Airflow (scheduler + webserver)
-#    - Apache Superset
+#  Ubicación: deploy/local/docker/docker-compose.analytics.yml
 #
-#  Uso:
+#  Prerequisito: el stack principal debe estar corriendo.
+#    cd deploy/local/docker
+#    docker-compose up -d
+#
+#  Luego levantar este stack:
 #    docker-compose -f docker-compose.analytics.yml up -d
 #
-#  Prerequisito: la red "restaurant_net" debe existir.
-#  Si levantás el stack principal primero, ya existe.
-#  Si no: docker network create restaurant_net
+#  La red "docker_default" es creada automáticamente por
+#  docker-compose.yml al estar en la carpeta "docker/".
+#  Este stack se une a ella para poder alcanzar db_api,
+#  mongo1/2/3, redis, etc. sin exponer puertos extra.
 # ============================================================
 
 version: "3.9"
 
 networks:
-  restaurant_net:
-    external: true          # comparte red con el stack principal (API, Mongo, Postgres)
+  proyecto2_network:
+    external: true
+    name: proyecto2-basesii_default
 
 volumes:
-  hive_metastore_data:      # datos del PostgreSQL interno de Hive Metastore
-  hive_warehouse_data:      # archivos ORC del warehouse
-  airflow_db_data:          # SQLite / Postgres de Airflow
+  hive_metastore_data:
+  hive_warehouse_data:
+  airflow_db_data:
   airflow_logs:
   superset_data:
 
-# ------------------------------------------------------------
-#  Variables de entorno comunes para Airflow
-# ------------------------------------------------------------
 x-airflow-common: &airflow-common
   image: apache/airflow:2.9.1
   environment:
@@ -43,18 +41,17 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
 
-    # Variables que el DAG lee para saber qué extractor usar
     DB_ENGINE: ${DB_ENGINE:-postgres}
 
-    # PostgreSQL OLTP (si DB_ENGINE=postgres)
-    DB_HOST:     ${DB_HOST:-postgres}
+    # PostgreSQL OLTP — mismo nombre de contenedor que docker-compose.yml
+    DB_HOST:     ${DB_HOST:-db_api}
     DB_PORT:     ${DB_PORT:-5432}
-    DB_USER:     ${DB_USER:-postgres}
-    DB_PASSWORD: ${DB_PASSWORD:-postgres}
-    DB_NAME:     ${DB_NAME:-restaurantdb}
+    DB_USER:     ${POSTGRES_USER:-postgres}
+    DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    DB_NAME:     ${RESTAURANT_DB:-restaurantdb}
 
-    # MongoDB OLTP (si DB_ENGINE=mongo)
-    MONGO_URL: ${MONGO_URL:-mongodb://mongos-service:27017}
+    # MongoDB OLTP — replica set del stack principal
+    MONGO_URL: ${MONGO_URL:-mongodb://mongo1:27017,mongo2:27017,mongo3:27017/?replicaSet=rs0}
     MONGO_DB:  ${MONGO_DB:-restaurantdb}
 
     # Hive
@@ -66,12 +63,13 @@ x-airflow-common: &airflow-common
     SPARK_MASTER_URL: spark://spark-master:7077
 
   volumes:
-    - ./analytics/airflow/dags:/opt/airflow/dags
-    - ./analytics/airflow/plugins:/opt/airflow/plugins
-    - ./analytics/spark/jobs:/opt/airflow/spark_jobs   # jobs accesibles desde el DAG
+    - ../../../analytics/airflow/dags:/opt/airflow/dags
+    - ../../../analytics/airflow/plugins:/opt/airflow/plugins
+    - ../../../analytics/spark/jobs:/opt/airflow/spark_jobs
+    - ../../../analytics/hive/etl:/opt/airflow/etl
     - airflow_logs:/opt/airflow/logs
   networks:
-    - restaurant_net
+    - proyecto2_network
   depends_on:
     airflow-db:
       condition: service_healthy
@@ -79,8 +77,8 @@ x-airflow-common: &airflow-common
 services:
 
   # ----------------------------------------------------------
-  #  Hive Metastore Database (PostgreSQL dedicado)
-  #  NO es el mismo Postgres del OLTP — es interno de Hive.
+  #  Hive Metastore DB — Postgres INTERNO de Hive
+  #  Distinto del db_api del stack principal
   # ----------------------------------------------------------
   hive-metastore-db:
     image: postgres:15-alpine
@@ -92,7 +90,7 @@ services:
     volumes:
       - hive_metastore_data:/var/lib/postgresql/data
     networks:
-      - restaurant_net
+      - proyecto2_network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hive -d metastore"]
       interval: 10s
@@ -106,8 +104,8 @@ services:
     image: apache/hive:4.0.0
     container_name: hive-metastore
     environment:
-      SERVICE_NAME:         metastore
-      DB_DRIVER:            postgres
+      SERVICE_NAME: metastore
+      DB_DRIVER:    postgres
       SERVICE_OPTS: >-
         -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver
         -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://hive-metastore-db:5432/metastore
@@ -118,14 +116,13 @@ services:
     ports:
       - "9083:9083"
     networks:
-      - restaurant_net
+      - proyecto2_network
     depends_on:
       hive-metastore-db:
         condition: service_healthy
 
   # ----------------------------------------------------------
-  #  Hive Server2
-  #  Expone el endpoint Thrift que PyHive y Beeline usan.
+  #  Hive Server2  →  Thrift :10000, Web UI :10002
   # ----------------------------------------------------------
   hive-server:
     image: apache/hive:4.0.0
@@ -137,12 +134,12 @@ services:
       IS_RESUME: "true"
     volumes:
       - hive_warehouse_data:/opt/hive/data/warehouse
-      - ./analytics/hive/ddl:/hive-init               # montamos los .hql para init
+      - ../../../analytics/hive/ddl:/hive-init
     ports:
-      - "10000:10000"   # Thrift (PyHive, beeline)
-      - "10002:10002"   # Web UI de HiveServer2
+      - "10000:10000"
+      - "10002:10002"
     networks:
-      - restaurant_net
+      - proyecto2_network
     depends_on:
       - hive-metastore
     healthcheck:
@@ -152,7 +149,7 @@ services:
       retries: 10
 
   # ----------------------------------------------------------
-  #  Hive Init — corre los .hql una sola vez al levantar
+  #  Hive Init — ejecuta los .hql UNA sola vez al levantar
   # ----------------------------------------------------------
   hive-init:
     image: apache/hive:4.0.0
@@ -160,61 +157,61 @@ services:
     entrypoint: >
       /bin/bash -c "
         echo 'Esperando HiveServer2...';
-        sleep 30;
+        sleep 40;
         beeline -u 'jdbc:hive2://hive-server:10000' -f /hive-init/01_star_schema.hql &&
         beeline -u 'jdbc:hive2://hive-server:10000' -f /hive-init/02_vistas_olap.hql &&
-        echo 'Schema y vistas creados OK.';
+        echo 'Schema y vistas creados correctamente.'
       "
     volumes:
-      - ./analytics/hive/ddl:/hive-init
+      - ../../../analytics/hive/ddl:/hive-init
     networks:
-      - restaurant_net
+      - proyecto2_network
     depends_on:
       hive-server:
         condition: service_healthy
-    restart: "no"       # corre una vez y termina
+    restart: "no"
 
   # ----------------------------------------------------------
-  #  Spark Master
+  #  Spark Master  →  Web UI :8081  (8080 = Keycloak)
   # ----------------------------------------------------------
   spark-master:
     image: bitnami/spark:3.5
     container_name: spark-master
     environment:
-      SPARK_MODE:               master
-      SPARK_MASTER_HOST:        spark-master
+      SPARK_MODE:        master
+      SPARK_MASTER_HOST: spark-master
       SPARK_RPC_AUTHENTICATION_ENABLED: "no"
       SPARK_RPC_ENCRYPTION_ENABLED:     "no"
     ports:
-      - "8080:8080"   # Spark Web UI
-      - "7077:7077"   # Spark Master port
+      - "8081:8080"
+      - "7077:7077"
     networks:
-      - restaurant_net
+      - proyecto2_network
     volumes:
-      - ./analytics/spark/jobs:/opt/spark-jobs
+      - ../../../analytics/spark/jobs:/opt/spark-jobs
 
   # ----------------------------------------------------------
-  #  Spark Worker
-  #  Escalable: docker-compose up --scale spark-worker=3
+  #  Spark Worker — escalable:
+  #  docker-compose -f docker-compose.analytics.yml up --scale spark-worker=3 -d
   # ----------------------------------------------------------
   spark-worker:
     image: bitnami/spark:3.5
     environment:
-      SPARK_MODE:        worker
-      SPARK_MASTER_URL:  spark://spark-master:7077
+      SPARK_MODE:          worker
+      SPARK_MASTER_URL:    spark://spark-master:7077
       SPARK_WORKER_MEMORY: 2G
       SPARK_WORKER_CORES:  2
       SPARK_RPC_AUTHENTICATION_ENABLED: "no"
       SPARK_RPC_ENCRYPTION_ENABLED:     "no"
     networks:
-      - restaurant_net
+      - proyecto2_network
     volumes:
-      - ./analytics/spark/jobs:/opt/spark-jobs
+      - ../../../analytics/spark/jobs:/opt/spark-jobs
     depends_on:
       - spark-master
 
   # ----------------------------------------------------------
-  #  Airflow — base de datos interna
+  #  Airflow DB — Postgres INTERNO de Airflow
   # ----------------------------------------------------------
   airflow-db:
     image: postgres:15-alpine
@@ -226,7 +223,7 @@ services:
     volumes:
       - airflow_db_data:/var/lib/postgresql/data
     networks:
-      - restaurant_net
+      - proyecto2_network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U airflow"]
       interval: 10s
@@ -234,26 +231,25 @@ services:
       retries: 5
 
   # ----------------------------------------------------------
-  #  Airflow Init — crea tablas y usuario admin
+  #  Airflow Init — instala deps, migra DB, crea admin
   # ----------------------------------------------------------
   airflow-init:
     <<: *airflow-common
     container_name: airflow-init
     entrypoint: >
       /bin/bash -c "
+        pip install pyhive thrift thrift-sasl psycopg2-binary pymongo apache-airflow-providers-apache-spark &&
         airflow db migrate &&
         airflow users create
-          --username admin
-          --password admin
-          --firstname Admin
-          --lastname User
-          --role Admin
-          --email admin@restaurant.local || true
+          --username admin --password admin
+          --firstname Admin --lastname User
+          --role Admin --email admin@restaurant.local || true
       "
     restart: "no"
 
   # ----------------------------------------------------------
   #  Airflow Webserver  →  http://localhost:8090
+  #  usuario: admin / admin
   # ----------------------------------------------------------
   airflow-webserver:
     <<: *airflow-common
@@ -283,7 +279,7 @@ services:
 
   # ----------------------------------------------------------
   #  Apache Superset  →  http://localhost:8088
-  #  Usuario por defecto: admin / admin
+  #  usuario: admin / admin
   # ----------------------------------------------------------
   superset:
     image: apache/superset:3.1.0
@@ -292,9 +288,9 @@ services:
       SUPERSET_SECRET_KEY: "restaurant_superset_secret_change_me"
       SUPERSET_LOAD_EXAMPLES: "no"
     ports:
-      - "8088:8088"
+      - "8089:8088"
     networks:
-      - restaurant_net
+      - proyecto2_network
     volumes:
       - superset_data:/app/superset_home
     depends_on:

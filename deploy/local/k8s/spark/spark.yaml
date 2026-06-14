@@ -1,0 +1,110 @@
+# deploy/local/k8s/spark/spark.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-master
+  namespace: restaurant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spark-master
+  template:
+    metadata:
+      labels:
+        app: spark-master
+    spec:
+      containers:
+        - name: spark-master
+          image: bitnami/spark:3.5
+          env:
+            - name: SPARK_MODE
+              value: master
+            - name: SPARK_MASTER_HOST
+              value: spark-master
+            - name: SPARK_RPC_AUTHENTICATION_ENABLED
+              value: "no"
+            - name: SPARK_RPC_ENCRYPTION_ENABLED
+              value: "no"
+          ports:
+            - containerPort: 8080    # Web UI
+              name: webui
+            - containerPort: 7077    # Master port
+              name: master
+          volumeMounts:
+            - name: spark-jobs
+              mountPath: /opt/spark-jobs
+      volumes:
+        - name: spark-jobs
+          configMap:
+            name: spark-jobs-configmap   # ver spark-configmap.yaml
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-master
+  namespace: restaurant
+spec:
+  selector:
+    app: spark-master
+  ports:
+    - name: webui
+      port: 8080
+      targetPort: 8080
+      nodePort: 30081
+    - name: master
+      port: 7077
+      targetPort: 7077
+  type: NodePort
+---
+# Spark Worker — escalable con kubectl scale
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spark-worker
+  namespace: restaurant
+spec:
+  replicas: 2      # escalar con: kubectl scale deployment spark-worker --replicas=N -n restaurant
+  selector:
+    matchLabels:
+      app: spark-worker
+  template:
+    metadata:
+      labels:
+        app: spark-worker
+    spec:
+      containers:
+        - name: spark-worker
+          image: bitnami/spark:3.5
+          env:
+            - name: SPARK_MODE
+              value: worker
+            - name: SPARK_MASTER_URL
+              value: spark://spark-master:7077
+            - name: SPARK_WORKER_MEMORY
+              value: 2G
+            - name: SPARK_WORKER_CORES
+              value: "2"
+            - name: SPARK_RPC_AUTHENTICATION_ENABLED
+              value: "no"
+            - name: SPARK_RPC_ENCRYPTION_ENABLED
+              value: "no"
+          volumeMounts:
+            - name: spark-jobs
+              mountPath: /opt/spark-jobs
+      volumes:
+        - name: spark-jobs
+          configMap:
+            name: spark-jobs-configmap
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spark-worker
+  namespace: restaurant
+spec:
+  selector:
+    app: spark-worker
+  ports:
+    - port: 8081
+      targetPort: 8081

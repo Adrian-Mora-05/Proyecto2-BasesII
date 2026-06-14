@@ -92,7 +92,7 @@ RETURNS TABLE(
     latitud NUMERIC,
     longitud NUMERIC
 )
-)
+
 LANGUAGE plpgsql
 AS $$
 BEGIN

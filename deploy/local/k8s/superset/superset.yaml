@@ -1,0 +1,75 @@
+# deploy/local/k8s/superset/superset.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: superset-pvc
+  namespace: restaurant
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: superset
+  namespace: restaurant
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: superset
+  template:
+    metadata:
+      labels:
+        app: superset
+    spec:
+      containers:
+        - name: superset
+          image: apache/superset:3.1.0
+          env:
+            - name: SUPERSET_SECRET_KEY
+              value: "restaurant_superset_secret_change_me"
+            - name: SUPERSET_LOAD_EXAMPLES
+              value: "no"
+          command:
+            - /bin/bash
+            - -c
+            - |
+              pip install pyhive thrift thrift-sasl &&
+              superset db upgrade &&
+              superset fab create-admin \
+                --username admin --firstname Admin --lastname User \
+                --email admin@superset.local --password admin || true &&
+              superset init &&
+              superset run -p 8088 --with-threads --reload --debugger
+          ports:
+            - containerPort: 8088
+          volumeMounts:
+            - name: superset-home
+              mountPath: /app/superset_home
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8088
+            initialDelaySeconds: 60
+            periodSeconds: 20
+      volumes:
+        - name: superset-home
+          persistentVolumeClaim:
+            claimName: superset-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: superset
+  namespace: restaurant
+spec:
+  selector:
+    app: superset
+  ports:
+    - port: 8088
+      targetPort: 8088
+      nodePort: 30088
+  type: NodePort

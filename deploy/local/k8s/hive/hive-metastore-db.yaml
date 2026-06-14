@@ -1,0 +1,59 @@
+# deploy/local/k8s/hive/hive-metastore-db.yaml
+# Postgres INTERNO de Hive — distinto del postgres del OLTP
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: hive-metastore-db
+  namespace: restaurant
+spec:
+  serviceName: hive-metastore-db
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hive-metastore-db
+  template:
+    metadata:
+      labels:
+        app: hive-metastore-db
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          env:
+            - name: POSTGRES_DB
+              value: metastore
+            - name: POSTGRES_USER
+              value: hive
+            - name: POSTGRES_PASSWORD
+              value: hive
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "hive", "-d", "metastore"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hive-metastore-db
+  namespace: restaurant
+spec:
+  clusterIP: None       # headless — StatefulSet lo necesita
+  selector:
+    app: hive-metastore-db
+  ports:
+    - port: 5432
+      targetPort: 5432

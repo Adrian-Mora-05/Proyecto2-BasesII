@@ -1,4 +1,4 @@
-# 🍽️ API de Gestión de Restaurantes — Etapa 2
+# 🍽️ API de Gestión de Restaurantes — Etapa 3
 
 ![Node.js](https://img.shields.io/badge/Node.js-20-green)
 ![Docker](https://img.shields.io/badge/Docker-Enabled-blue)
@@ -92,6 +92,11 @@ docker compose -f docker-compose.mongo.yml up --build
 ### Con PostgreSQL
 ```bash
 docker compose -f docker-compose.postgres.yml up --build
+
+docker compose `
+  --project-directory . `
+  -f deploy/local/docker/docker-compose.postgres.yml `
+  up -d
 ```
 
 ### Detener y limpiar
