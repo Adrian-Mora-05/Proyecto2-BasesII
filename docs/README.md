@@ -99,6 +99,7 @@ docker compose `
   up -d
 ```
 
+
 ### Detener y limpiar
 ```bash
 docker compose -f docker-compose.mongo.yml down -v
@@ -107,6 +108,12 @@ docker compose -f docker-compose.mongo.yml down -v
 ```bash
 docker compose -f docker-compose.postgres.yml down -v
 ```
+
+
+docker compose `
+  --project-directory . `
+  -f deploy/local/docker/docker-compose.analytics.yml `
+  down -v
 
 ### Servicios disponibles (Docker Compose)
 

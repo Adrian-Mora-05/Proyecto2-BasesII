@@ -1,24 +1,7 @@
 # ============================================================
-#  docker-compose.analytics.yml
-#  Stack de Analytics — Etapa 3
-#  Proyecto: Reserva Inteligente de Restaurantes
-#
+#  docker-compose.analytics.yml — Etapa 3
 #  Ubicación: deploy/local/docker/docker-compose.analytics.yml
-#
-#  Prerequisito: el stack principal debe estar corriendo.
-#    cd deploy/local/docker
-#    docker-compose up -d
-#
-#  Luego levantar este stack:
-#    docker-compose -f docker-compose.analytics.yml up -d
-#
-#  La red "docker_default" es creada automáticamente por
-#  docker-compose.yml al estar en la carpeta "docker/".
-#  Este stack se une a ella para poder alcanzar db_api,
-#  mongo1/2/3, redis, etc. sin exponer puertos extra.
 # ============================================================
-
-version: "3.9"
 
 networks:
   proyecto2_network:
@@ -40,33 +23,23 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__FERNET_KEY: ""
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
-
-    DB_ENGINE: ${DB_ENGINE:-postgres}
-
-    # PostgreSQL OLTP — mismo nombre de contenedor que docker-compose.yml
-    DB_HOST:     ${DB_HOST:-db_api}
-    DB_PORT:     ${DB_PORT:-5432}
-    DB_USER:     ${POSTGRES_USER:-postgres}
-    DB_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-    DB_NAME:     ${RESTAURANT_DB:-restaurantdb}
-
-    # MongoDB OLTP — replica set del stack principal
-    MONGO_URL: ${MONGO_URL:-mongodb://mongo1:27017,mongo2:27017,mongo3:27017/?replicaSet=rs0}
-    MONGO_DB:  ${MONGO_DB:-restaurantdb}
-
-    # Hive
-    HIVE_HOST: hive-server
-    HIVE_PORT: "10000"
-    HIVE_DB:   restaurant_dw
-
-    # Spark
+    DB_ENGINE:        ${DB_ENGINE:-postgres}
+    DB_HOST:          ${DB_HOST:-db_api}
+    DB_PORT:          ${DB_PORT:-5432}
+    DB_USER:          ${POSTGRES_USER:-postgres}
+    DB_PASSWORD:      ${POSTGRES_PASSWORD:-postgres}
+    DB_NAME:          ${RESTAURANT_DB:-restaurantdb}
+    MONGO_URL:        ${MONGO_URL:-mongodb://mongo1:27017,mongo2:27017,mongo3:27017/?replicaSet=rs0}
+    MONGO_DB:         ${MONGO_DB:-restaurantdb}
+    HIVE_HOST:        hive-server
+    HIVE_PORT:        "10000"
+    HIVE_DB:          restaurant_dw
     SPARK_MASTER_URL: spark://spark-master:7077
-
   volumes:
-    - ../../../analytics/airflow/dags:/opt/airflow/dags
-    - ../../../analytics/airflow/plugins:/opt/airflow/plugins
-    - ../../../analytics/spark/jobs:/opt/airflow/spark_jobs
-    - ../../../analytics/hive/etl:/opt/airflow/etl
+    - ${PWD}/analytics/airflow/dags:/opt/airflow/dags
+    - ${PWD}/analytics/airflow/plugins:/opt/airflow/plugins
+    - ${PWD}/analytics/spark/jobs:/opt/airflow/spark_jobs
+    - ${PWD}/analytics/hive/etl:/opt/airflow/etl
     - airflow_logs:/opt/airflow/logs
   networks:
     - proyecto2_network
@@ -76,10 +49,6 @@ x-airflow-common: &airflow-common
 
 services:
 
-  # ----------------------------------------------------------
-  #  Hive Metastore DB — Postgres INTERNO de Hive
-  #  Distinto del db_api del stack principal
-  # ----------------------------------------------------------
   hive-metastore-db:
     image: postgres:15-alpine
     container_name: hive-metastore-db
@@ -97,12 +66,10 @@ services:
       timeout: 5s
       retries: 5
 
-  # ----------------------------------------------------------
-  #  Hive Metastore
-  # ----------------------------------------------------------
   hive-metastore:
     image: apache/hive:4.0.0
     container_name: hive-metastore
+    entrypoint: ["/bin/bash", "/hive-scripts/init-metastore.sh"]
     environment:
       SERVICE_NAME: metastore
       DB_DRIVER:    postgres
@@ -113,20 +80,23 @@ services:
         -Djavax.jdo.option.ConnectionPassword=hive
     volumes:
       - hive_warehouse_data:/opt/hive/data/warehouse
-    ports:
-      - "9083:9083"
+      - ${PWD}/analytics/hive/scripts:/hive-scripts
     networks:
       - proyecto2_network
     depends_on:
       hive-metastore-db:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -v grep | grep -q 'metastore' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      start_period: 120s
 
-  # ----------------------------------------------------------
-  #  Hive Server2  →  Thrift :10000, Web UI :10002
-  # ----------------------------------------------------------
   hive-server:
     image: apache/hive:4.0.0
     container_name: hive-server
+    entrypoint: ["/bin/bash", "/hive-scripts/init-hiveserver.sh"]
     environment:
       SERVICE_NAME: hiveserver2
       SERVICE_OPTS: >-
@@ -134,36 +104,36 @@ services:
       IS_RESUME: "true"
     volumes:
       - hive_warehouse_data:/opt/hive/data/warehouse
-      - ../../../analytics/hive/ddl:/hive-init
+      - ${PWD}/analytics/hive/ddl:/hive-init
+      - ${PWD}/analytics/hive/scripts:/hive-scripts
     ports:
       - "10000:10000"
       - "10002:10002"
     networks:
       - proyecto2_network
     depends_on:
-      - hive-metastore
+      hive-metastore:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "beeline -u 'jdbc:hive2://localhost:10000' -e 'SHOW DATABASES;' 2>&1 | grep -q 'default'"]
+      test: ["CMD-SHELL", "ps aux | grep -v grep | grep -q 'hiveserver2\\|HiveServer2' || exit 1"]
       interval: 30s
       timeout: 20s
-      retries: 10
+      retries: 15
+      start_period: 120s
 
-  # ----------------------------------------------------------
-  #  Hive Init — ejecuta los .hql UNA sola vez al levantar
-  # ----------------------------------------------------------
   hive-init:
     image: apache/hive:4.0.0
     container_name: hive-init
     entrypoint: >
       /bin/bash -c "
         echo 'Esperando HiveServer2...';
-        sleep 40;
+        sleep 30;
         beeline -u 'jdbc:hive2://hive-server:10000' -f /hive-init/01_star_schema.hql &&
         beeline -u 'jdbc:hive2://hive-server:10000' -f /hive-init/02_vistas_olap.hql &&
-        echo 'Schema y vistas creados correctamente.'
+        echo '=== Schema y vistas creados correctamente ==='
       "
     volumes:
-      - ../../../analytics/hive/ddl:/hive-init
+      - ${PWD}/analytics/hive/ddl:/hive-init
     networks:
       - proyecto2_network
     depends_on:
@@ -171,48 +141,33 @@ services:
         condition: service_healthy
     restart: "no"
 
-  # ----------------------------------------------------------
-  #  Spark Master  →  Web UI :8081  (8080 = Keycloak)
-  # ----------------------------------------------------------
   spark-master:
-    image: bitnami/spark:3.5
+    image: apache/spark:3.5.6
     container_name: spark-master
+    entrypoint: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.master.Master"]
     environment:
-      SPARK_MODE:        master
       SPARK_MASTER_HOST: spark-master
-      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
-      SPARK_RPC_ENCRYPTION_ENABLED:     "no"
     ports:
       - "8081:8080"
       - "7077:7077"
     networks:
       - proyecto2_network
     volumes:
-      - ../../../analytics/spark/jobs:/opt/spark-jobs
+      - ${PWD}/analytics/spark/jobs:/opt/spark-jobs
 
-  # ----------------------------------------------------------
-  #  Spark Worker — escalable:
-  #  docker-compose -f docker-compose.analytics.yml up --scale spark-worker=3 -d
-  # ----------------------------------------------------------
   spark-worker:
-    image: bitnami/spark:3.5
+    image: apache/spark:3.5.6
+    entrypoint: ["/opt/spark/bin/spark-class", "org.apache.spark.deploy.worker.Worker", "spark://spark-master:7077"]
     environment:
-      SPARK_MODE:          worker
-      SPARK_MASTER_URL:    spark://spark-master:7077
       SPARK_WORKER_MEMORY: 2G
-      SPARK_WORKER_CORES:  2
-      SPARK_RPC_AUTHENTICATION_ENABLED: "no"
-      SPARK_RPC_ENCRYPTION_ENABLED:     "no"
+      SPARK_WORKER_CORES:  "2"
     networks:
       - proyecto2_network
     volumes:
-      - ../../../analytics/spark/jobs:/opt/spark-jobs
+      - ${PWD}/analytics/spark/jobs:/opt/spark-jobs
     depends_on:
       - spark-master
 
-  # ----------------------------------------------------------
-  #  Airflow DB — Postgres INTERNO de Airflow
-  # ----------------------------------------------------------
   airflow-db:
     image: postgres:15-alpine
     container_name: airflow-db
@@ -231,26 +186,23 @@ services:
       retries: 5
 
   # ----------------------------------------------------------
-  #  Airflow Init — instala deps, migra DB, crea admin
+  #  Airflow Init
+  #  CRÍTICO: instalar con versiones fijas para no sobreescribir
+  #  el Airflow 2.9.1 de la imagen base.
   # ----------------------------------------------------------
   airflow-init:
     <<: *airflow-common
     container_name: airflow-init
-    entrypoint: >
-      /bin/bash -c "
-        pip install pyhive thrift thrift-sasl psycopg2-binary pymongo apache-airflow-providers-apache-spark &&
-        airflow db migrate &&
-        airflow users create
-          --username admin --password admin
-          --firstname Admin --lastname User
-          --role Admin --email admin@restaurant.local || true
-      "
+    entrypoint: ["/bin/bash", "/airflow-scripts/airflow-init.sh"]
+    volumes:
+      - ${PWD}/analytics/airflow/dags:/opt/airflow/dags
+      - ${PWD}/analytics/airflow/plugins:/opt/airflow/plugins
+      - ${PWD}/analytics/spark/jobs:/opt/airflow/spark_jobs
+      - ${PWD}/analytics/hive/etl:/opt/airflow/etl
+      - ${PWD}/analytics/airflow/scripts:/airflow-scripts
+      - airflow_logs:/opt/airflow/logs
     restart: "no"
 
-  # ----------------------------------------------------------
-  #  Airflow Webserver  →  http://localhost:8090
-  #  usuario: admin / admin
-  # ----------------------------------------------------------
   airflow-webserver:
     <<: *airflow-common
     container_name: airflow-webserver
@@ -266,9 +218,6 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
-  # ----------------------------------------------------------
-  #  Airflow Scheduler
-  # ----------------------------------------------------------
   airflow-scheduler:
     <<: *airflow-common
     container_name: airflow-scheduler
@@ -277,10 +226,6 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
-  # ----------------------------------------------------------
-  #  Apache Superset  →  http://localhost:8088
-  #  usuario: admin / admin
-  # ----------------------------------------------------------
   superset:
     image: apache/superset:3.1.0
     container_name: superset
@@ -294,10 +239,11 @@ services:
     volumes:
       - superset_data:/app/superset_home
     depends_on:
-      - hive-server
+      hive-server:
+        condition: service_healthy
     command: >
       /bin/bash -c "
-        pip install pyhive thrift thrift-sasl &&
+        pip install --quiet pyhive thrift thrift-sasl &&
         superset db upgrade &&
         superset fab create-admin
           --username admin --firstname Admin --lastname User

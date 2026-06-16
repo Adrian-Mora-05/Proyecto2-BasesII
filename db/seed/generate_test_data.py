@@ -324,8 +324,8 @@ def insertar_postgres(pedidos: list[dict], reservaciones: list[dict]):
     conn = psycopg2.connect(
         host=os.environ.get("DB_HOST", "localhost"),
         port=int(os.environ.get("DB_PORT", 5432)),
-        user=os.environ.get("DB_USER", "postgres"),
-        password=os.environ.get("DB_PASSWORD", "postgres"),
+        user=os.environ.get("DB_USER", "admin"),
+        password=os.environ.get("DB_PASSWORD", "admin"),
         database=os.environ.get("DB_NAME", "restaurantdb"),
         options="-c search_path=restaurant",
     )
