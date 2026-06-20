@@ -19,7 +19,7 @@ RUN npm install --omit=dev
 
 # Copiar el código del script
 COPY migrate.js ./
-
+COPY routing/ ./routing/
 # Comando que se ejecuta cuando el contenedor arranca
 # El script lee de PG o Mongo y carga en Neo4J, luego termina
 CMD ["node", "migrate.js"]

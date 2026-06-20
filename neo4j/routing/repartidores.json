@@ -1,0 +1,19 @@
+{
+  "repartidores": [
+    {
+      "id": "rep-001",
+      "nombre": "Carlos Solano",
+      "ubicacion_base": "cartago-centro"
+    },
+    {
+      "id": "rep-002",
+      "nombre": "Marcela Brenes",
+      "ubicacion_base": "tres-rios"
+    },
+    {
+      "id": "rep-003",
+      "nombre": "Esteban Quiros",
+      "ubicacion_base": "el-tejar"
+    }
+  ]
+}
