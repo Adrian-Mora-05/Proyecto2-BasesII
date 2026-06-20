@@ -115,6 +115,55 @@ docker compose `
   -f deploy/local/docker/docker-compose.analytics.yml `
   down -v
 
+
+# Para correrlo:
+
+Paso 1 — Stack principal
+powershellcd C:\Users\Dra. Mora Chacón\Documents\GitHub\Proyecto2-BasesII
+
+docker compose `
+  --project-directory . `
+  -f deploy/local/docker/docker-compose.postgres.yml ` // o docker-compose.mongo.yml
+  up -d
+
+
+Paso 2 — Copiar el jar (siempre que se reinicia)
+powershelldocker run --rm `
+  -v "${PWD}/analytics/hive/drivers/postgresql.jar:/source/postgresql.jar" `
+  -v "proyecto2-basesii_hive_warehouse_data:/dest" `
+  alpine sh -c "cp /source/postgresql.jar /dest/postgresql.jar && chmod 777 /dest"
+
+
+Paso 3 — Stack de analytics
+powershelldocker compose `
+  --project-directory . `
+  -f deploy/local/docker/docker-compose.analytics.yml `
+  up -d
+
+Paso 4 — Esperar y verificar
+powershell# Esperar ~3 minutos y verificar que todo esté healthy
+docker ps --format "{{.Names}}: {{.Status}}"
+Los servicios que deben estar healthy: hive-metastore, hive-server, airflow-webserver, superset, db_api, redis, elasticsearch.
+
+
+Paso 5 — Recrear el star schema si es necesario
+powershelldocker compose `
+  --project-directory . `
+  -f deploy/local/docker/docker-compose.analytics.yml `
+  run --rm hive-init
+
+
+Paso 6 — Verificar Airflow
+Abrí http://localhost:8090 — si el DAG restaurant_pipeline aparece, triggealo. Si load_dimensions falla de nuevo con No module named 'pyhive', corrés:
+powershelldocker rm -f airflow-scheduler
+
+docker compose `
+  --project-directory . `
+  -f deploy/local/docker/docker-compose.analytics.yml `
+  up airflow-scheduler -d
+
+
+
 ### Servicios disponibles (Docker Compose)
 
 | Servicio | URL |

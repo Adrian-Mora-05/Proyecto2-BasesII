@@ -16,6 +16,9 @@ else
     echo "Driver ya existe: $(ls -lh $DRIVER_DST)"
 fi
 
+echo "Asegurando permisos de escritura en el warehouse..."
+chmod -R 777 /opt/hive/data/warehouse 2>/dev/null || echo "No se pudo aplicar chmod (puede que ya esté OK)"
+
 export HADOOP_CLASSPATH="$DRIVER_DST:$HADOOP_CLASSPATH"
 export HIVE_AUX_JARS_PATH="$DRIVER_DST"
 
