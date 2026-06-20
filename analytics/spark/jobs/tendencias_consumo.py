@@ -194,17 +194,39 @@ def analisis_categorias_crecimiento(tbls: dict):
     return df
 
 
+import shutil
+
+HIVE_WAREHOUSE_PATH = os.environ.get("HIVE_WAREHOUSE_DIR", "/opt/hive/data/warehouse")
+
+
+def _force_clean_table(spark: SparkSession, nombre: str):
+    """
+    Elimina por completo una tabla: metadata en el metastore Y
+    directorio físico en disco. DROP TABLE solo no es suficiente
+    porque puede dejar el directorio huérfano si el commit previo
+    falló a medias, causando LOCATION_ALREADY_EXISTS en la próxima
+    corrida.
+    """
+    tabla_hive = f"restaurant_dw.{nombre}"
+    spark.sql(f"DROP TABLE IF EXISTS {tabla_hive}")
+
+    ruta_fisica = f"{HIVE_WAREHOUSE_PATH}/restaurant_dw.db/{nombre}"
+    if os.path.exists(ruta_fisica):
+        logger.info(f"Eliminando directorio huérfano: {ruta_fisica}")
+        shutil.rmtree(ruta_fisica, ignore_errors=True)
+
+
 def save_results(spark: SparkSession, dfs: dict):
     """
     Guarda cada DataFrame como tabla Hive (consumida por Superset).
-    Hace DROP explícito antes de crear para evitar el error
+    Limpia metadata Y filesystem antes de crear para evitar el error
     LOCATION_ALREADY_EXISTS cuando la tabla ya existe de una
     corrida anterior.
     """
     for nombre, df in dfs.items():
         tabla_hive = f"restaurant_dw.{nombre}"
         logger.info(f"Guardando {tabla_hive} ...")
-        spark.sql(f"DROP TABLE IF EXISTS {tabla_hive}")
+        _force_clean_table(spark, nombre)
         df.write.mode("overwrite").saveAsTable(tabla_hive)
         logger.info(f"  → {df.count()} filas guardadas.")
 

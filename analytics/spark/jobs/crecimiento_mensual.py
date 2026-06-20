@@ -182,11 +182,26 @@ def analisis_crecimiento_tipo_pedido(tbls):
     )
 
 
+import shutil
+
+HIVE_WAREHOUSE_PATH = os.environ.get("HIVE_WAREHOUSE_DIR", "/opt/hive/data/warehouse")
+
+
+def _force_clean_table(spark, nombre):
+    """Elimina metadata Y directorio físico para evitar LOCATION_ALREADY_EXISTS."""
+    tabla_hive = f"restaurant_dw.{nombre}"
+    spark.sql(f"DROP TABLE IF EXISTS {tabla_hive}")
+    ruta_fisica = f"{HIVE_WAREHOUSE_PATH}/restaurant_dw.db/{nombre}"
+    if os.path.exists(ruta_fisica):
+        logger.info(f"Eliminando directorio huérfano: {ruta_fisica}")
+        shutil.rmtree(ruta_fisica, ignore_errors=True)
+
+
 def save_results(spark, dfs):
     for nombre, df in dfs.items():
         tabla_hive = f"restaurant_dw.{nombre}"
         logger.info(f"Guardando {tabla_hive} ...")
-        spark.sql(f"DROP TABLE IF EXISTS {tabla_hive}")
+        _force_clean_table(spark, nombre)
         df.write.mode("overwrite").saveAsTable(tabla_hive)
         logger.info(f"  → {df.count()} filas guardadas.")
 
