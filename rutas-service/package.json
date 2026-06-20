@@ -1,0 +1,17 @@
+{
+  "name": "rutas-service",
+  "version": "1.0.0",
+  "description": "Microservicio de análisis de grafos y asignación de rutas de entrega",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.0",
+    "dotenv": "^16.4.0",
+    "neo4j-driver": "^5.18.0",
+    "pg": "^8.11.0",
+    "mongodb": "^6.3.0"
+  }
+}
