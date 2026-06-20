@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator, BranchPythonOperator
 from airflow.operators.empty import EmptyOperator
+from airflow.operators.bash import BashOperator
 from airflow.utils.dates import days_ago
 
 # Rutas montadas en el contenedor de Airflow
@@ -229,169 +230,9 @@ def load_facts(**context):
 
 
 # ------------------------------------------------------------
-#  T5a: Spark — Tendencias de consumo
-# ------------------------------------------------------------
-def run_spark_tendencias(**context):
-    from pyspark.sql import SparkSession
-
-    spark = SparkSession.builder \
-        .appName("tendencias_consumo") \
-        .master(SPARK_MASTER_URL) \
-        .config("spark.sql.warehouse.dir", "/opt/hive/data/warehouse") \
-        .enableHiveSupport() \
-        .getOrCreate()
-
-    try:
-        spark.sql("USE restaurant_dw")
-
-        df = spark.sql("""
-            SELECT
-                t.anio,
-                t.mes,
-                t.nombre_mes,
-                p.categoria,
-                r.nombre                            AS restaurante,
-                SUM(f.cantidad)                     AS unidades_vendidas,
-                ROUND(SUM(f.subtotal), 2)           AS ingresos,
-                COUNT(DISTINCT f.id_pedido_origen)  AS total_pedidos,
-                ROUND(AVG(f.precio_unitario), 2)    AS precio_promedio
-            FROM fact_pedido f
-            JOIN dim_tiempo         t ON f.id_tiempo        = t.id
-            JOIN dim_plato          p ON f.id_plato         = p.id
-            JOIN dim_restaurante    r ON f.id_restaurante   = r.id
-            JOIN dim_estado_pedido  e ON f.id_estado_pedido = e.id
-            WHERE e.nombre = 'completado'
-            GROUP BY t.anio, t.mes, t.nombre_mes, p.categoria, r.nombre
-            ORDER BY t.anio, t.mes, ingresos DESC
-        """)
-
-        # Guardar como tabla Hive para que Superset la consuma
-        df.write.mode("overwrite").saveAsTable("restaurant_dw.resultado_tendencias")
-
-        count = df.count()
-        logger.info(f"[Spark] tendencias_consumo: {count} filas escritas.")
-
-    finally:
-        spark.stop()
-
-
-# ------------------------------------------------------------
-#  T5b: Spark — Horarios pico
-# ------------------------------------------------------------
-def run_spark_horarios_pico(**context):
-    from pyspark.sql import SparkSession
-
-    spark = SparkSession.builder \
-        .appName("horarios_pico") \
-        .master(SPARK_MASTER_URL) \
-        .config("spark.sql.warehouse.dir", "/opt/hive/data/warehouse") \
-        .enableHiveSupport() \
-        .getOrCreate()
-
-    try:
-        spark.sql("USE restaurant_dw")
-
-        df = spark.sql("""
-            SELECT
-                t.hora,
-                t.nombre_dia,
-                t.dia_semana,
-                t.es_fin_semana,
-                t.es_hora_pico,
-                r.nombre                                AS restaurante,
-                COUNT(DISTINCT f.id_pedido_origen)      AS total_pedidos,
-                SUM(f.cantidad)                         AS unidades_vendidas,
-                ROUND(SUM(f.subtotal), 2)               AS ingresos,
-                COUNT(DISTINCT f.id_usuario)            AS clientes_unicos,
-                ROUND(
-                    COUNT(DISTINCT f.id_pedido_origen) * 100.0
-                    / SUM(COUNT(DISTINCT f.id_pedido_origen)) OVER (
-                        PARTITION BY r.nombre
-                    ), 2
-                )                                       AS pct_pedidos_restaurante
-            FROM fact_pedido f
-            JOIN dim_tiempo         t ON f.id_tiempo      = t.id
-            JOIN dim_restaurante    r ON f.id_restaurante = r.id
-            GROUP BY
-                t.hora, t.nombre_dia, t.dia_semana,
-                t.es_fin_semana, t.es_hora_pico, r.nombre
-            ORDER BY total_pedidos DESC
-        """)
-
-        df.write.mode("overwrite").saveAsTable("restaurant_dw.resultado_horarios_pico")
-
-        logger.info(f"[Spark] horarios_pico: {df.count()} filas escritas.")
-
-    finally:
-        spark.stop()
-
-
-# ------------------------------------------------------------
-#  T5c: Spark — Crecimiento mensual
-# ------------------------------------------------------------
-def run_spark_crecimiento(**context):
-    from pyspark.sql import SparkSession
-    from pyspark.sql import functions as F
-    from pyspark.sql.window import Window
-
-    spark = SparkSession.builder \
-        .appName("crecimiento_mensual") \
-        .master(SPARK_MASTER_URL) \
-        .config("spark.sql.warehouse.dir", "/opt/hive/data/warehouse") \
-        .enableHiveSupport() \
-        .getOrCreate()
-
-    try:
-        spark.sql("USE restaurant_dw")
-
-        # Agregado mensual base
-        df_base = spark.sql("""
-            SELECT
-                t.anio,
-                t.mes,
-                r.nombre                                AS restaurante,
-                COUNT(DISTINCT f.id_pedido_origen)      AS total_pedidos,
-                COUNT(DISTINCT f.id_usuario)            AS clientes_unicos,
-                ROUND(SUM(f.precio_total_pedido), 2)    AS ingresos_totales
-            FROM fact_pedido f
-            JOIN dim_tiempo         t ON f.id_tiempo      = t.id
-            JOIN dim_restaurante    r ON f.id_restaurante = r.id
-            JOIN dim_estado_pedido  e ON f.id_estado_pedido = e.id
-            WHERE e.nombre = 'completado'
-            GROUP BY t.anio, t.mes, r.nombre
-        """)
-
-        # Ventana para calcular mes anterior por restaurante
-        w = Window.partitionBy("restaurante").orderBy("anio", "mes")
-
-        df_crec = df_base \
-            .withColumn("pedidos_mes_anterior",  F.lag("total_pedidos",   1).over(w)) \
-            .withColumn("ingresos_mes_anterior", F.lag("ingresos_totales", 1).over(w)) \
-            .withColumn("crecimiento_pedidos_pct",
-                F.when(F.col("pedidos_mes_anterior") > 0,
-                    F.round(
-                        (F.col("total_pedidos") - F.col("pedidos_mes_anterior"))
-                        * 100.0 / F.col("pedidos_mes_anterior"), 2
-                    )
-                ).otherwise(None)
-            ) \
-            .withColumn("crecimiento_ingresos_pct",
-                F.when(F.col("ingresos_mes_anterior") > 0,
-                    F.round(
-                        (F.col("ingresos_totales") - F.col("ingresos_mes_anterior"))
-                        * 100.0 / F.col("ingresos_mes_anterior"), 2
-                    )
-                ).otherwise(None)
-            )
-
-        df_crec.write.mode("overwrite").saveAsTable("restaurant_dw.resultado_crecimiento_mensual")
-
-        logger.info(f"[Spark] crecimiento_mensual: {df_crec.count()} filas escritas.")
-
-    finally:
-        spark.stop()
-
-
+#  T5a/b/c: Spark — via SparkSubmitOperator
+#  Los jobs corren en el cluster Spark, no en el contenedor
+#  de Airflow (que no tiene Java).
 # ------------------------------------------------------------
 #  T6: Reindexar ElasticSearch si cambiaron platos
 # ------------------------------------------------------------
@@ -477,19 +318,58 @@ with DAG(
     )
 
     # ── T5: Jobs de Spark (en paralelo) ──────────────────────
+    # Ejecutamos spark-submit dentro del contenedor spark-master
+    # usando subprocess desde el scheduler de Airflow.
+    # El socket de Docker debe estar montado en el scheduler.
+
+    def _run_spark_job(job_name: str, **context):
+        import subprocess
+        cmd = [
+            "docker", "exec", "spark-master",
+            "/opt/spark/bin/spark-submit",
+            "--master", "spark://spark-master:7077",
+            "--conf", "spark.sql.warehouse.dir=/opt/hive/data/warehouse",
+            "--conf", "spark.sql.shuffle.partitions=8",
+            "--conf", "spark.hadoop.hive.metastore.uris=thrift://hive-metastore:9083",
+            "--conf", "spark.sql.catalogImplementation=hive",
+            "--conf", "spark.hadoop.javax.jdo.option.ConnectionURL=jdbc:postgresql://hive-metastore-db:5432/metastore",
+            "--conf", "spark.hadoop.javax.jdo.option.ConnectionDriverName=org.postgresql.Driver",
+            "--conf", "spark.hadoop.javax.jdo.option.ConnectionUserName=hive",
+            "--conf", "spark.hadoop.javax.jdo.option.ConnectionPassword=hive",
+            f"/opt/spark-jobs/{job_name}.py",
+        ]
+        logger.info(f"[Spark] Ejecutando: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        # Spark escribe INFO/WARN en stderr aunque tenga éxito.
+        # Solo fallamos si el returncode es != 0.
+        logger.info(f"[Spark] returncode: {result.returncode}")
+        if result.stdout:
+            logger.info(f"[Spark] stdout: {result.stdout[-2000:]}")
+        if result.stderr:
+            logger.info(f"[Spark] stderr: {result.stderr[-2000:]}")
+        if result.returncode != 0:
+            raise Exception(
+                f"spark-submit falló para {job_name} "
+                f"(returncode={result.returncode}): {result.stderr[-500:]}"
+            )
+        logger.info(f"[Spark] {job_name} completado OK")
+
     spark_tendencias = PythonOperator(
         task_id         = "spark_tendencias_consumo",
-        python_callable = run_spark_tendencias,
+        python_callable = _run_spark_job,
+        op_kwargs       = {"job_name": "tendencias_consumo"},
     )
 
     spark_pico = PythonOperator(
         task_id         = "spark_horarios_pico",
-        python_callable = run_spark_horarios_pico,
+        python_callable = _run_spark_job,
+        op_kwargs       = {"job_name": "horarios_pico"},
     )
 
     spark_crec = PythonOperator(
         task_id         = "spark_crecimiento_mensual",
-        python_callable = run_spark_crecimiento,
+        python_callable = _run_spark_job,
+        op_kwargs       = {"job_name": "crecimiento_mensual"},
     )
 
     # ── T6: Reindexar ElasticSearch ──────────────────────────

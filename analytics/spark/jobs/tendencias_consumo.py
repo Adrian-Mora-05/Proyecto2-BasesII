@@ -40,22 +40,36 @@ def create_spark_session() -> SparkSession:
         .master(SPARK_MASTER)
         .config("spark.sql.warehouse.dir", HIVE_WAREHOUSE)
         .config("spark.sql.adaptive.enabled", "true")
-        .config("spark.sql.shuffle.partitions", "8")   # bajo para entorno local
+        .config("spark.sql.shuffle.partitions", "8")
+        .config("spark.hadoop.hive.metastore.uris", "thrift://hive-metastore:9083")
+        .config("spark.sql.catalogImplementation", "hive")
         .enableHiveSupport()
         .getOrCreate()
     )
 
 
 def load_base_tables(spark: SparkSession):
-    """Carga las tablas del warehouse como DataFrames."""
     spark.sql("USE restaurant_dw")
+    # fact_pedido comparte nombres de columna con varias dimensiones
+    # (anio, mes, precio_unitario, etc). Seleccionamos explícitamente
+    # solo las columnas de hechos + las FKs, evitando cualquier colisión.
+    fact_pedido = spark.table("fact_pedido").select(
+        "id_tiempo", "id_restaurante", "id_usuario", "id_plato",
+        "id_tipo_pedido", "id_estado_pedido",
+        "id_pedido_origen", "id_plato_origen",
+        "cantidad",
+        F.col("precio_unitario").alias("precio_unitario_venta"),
+        "subtotal", "precio_total_pedido",
+        "latitud_entrega", "longitud_entrega",
+    )
     return {
-        "fact_pedido":      spark.table("fact_pedido"),
-        "dim_tiempo":       spark.table("dim_tiempo"),
-        "dim_plato":        spark.table("dim_plato"),
-        "dim_restaurante":  spark.table("dim_restaurante"),
-        "dim_estado_pedido":spark.table("dim_estado_pedido"),
-        "dim_usuario":      spark.table("dim_usuario"),
+        "fact_pedido":       fact_pedido,
+        "dim_tiempo":        spark.table("dim_tiempo").withColumnRenamed("id", "id_tiempo"),
+        "dim_plato":         spark.table("dim_plato").withColumnRenamed("id", "id_plato").withColumnRenamed("nombre", "nombre_plato"),
+        "dim_restaurante":   spark.table("dim_restaurante").withColumnRenamed("id", "id_restaurante").withColumnRenamed("nombre", "nombre_restaurante"),
+        "dim_estado_pedido": spark.table("dim_estado_pedido").withColumnRenamed("id", "id_estado_pedido").withColumnRenamed("nombre", "estado_nombre"),
+        "dim_usuario":       spark.table("dim_usuario").withColumnRenamed("id", "id_usuario").withColumnRenamed("nombre", "nombre_usuario"),
+        "dim_tipo_pedido":   spark.table("dim_tipo_pedido").withColumnRenamed("id", "id_tipo_pedido").withColumnRenamed("nombre", "tipo_nombre"),
     }
 
 
@@ -69,22 +83,22 @@ def analisis_ingresos_mes_categoria(tbls: dict):
     df = (
         tbls["fact_pedido"]
         .join(tbls["dim_tiempo"],        "id_tiempo")
-        .join(tbls["dim_plato"],          tbls["fact_pedido"]["id_plato"] == tbls["dim_plato"]["id"])
-        .join(tbls["dim_restaurante"],    tbls["fact_pedido"]["id_restaurante"] == tbls["dim_restaurante"]["id"])
-        .join(tbls["dim_estado_pedido"],  tbls["fact_pedido"]["id_estado_pedido"] == tbls["dim_estado_pedido"]["id"])
-        .filter(F.col("dim_estado_pedido.nombre") == "completado")
+        .join(tbls["dim_plato"],          "id_plato")
+        .join(tbls["dim_restaurante"],    "id_restaurante")
+        .join(tbls["dim_estado_pedido"],  "id_estado_pedido")
+        .filter(F.col("estado_nombre") == "completado")
         .groupBy(
-            tbls["dim_tiempo"]["anio"],
-            tbls["dim_tiempo"]["mes"],
-            tbls["dim_tiempo"]["nombre_mes"],
-            tbls["dim_plato"]["categoria"],
-            tbls["dim_restaurante"]["nombre"].alias("restaurante"),
+            F.col("anio"),
+            F.col("mes"),
+            F.col("nombre_mes"),
+            F.col("categoria"),
+            F.col("nombre_restaurante").alias("restaurante"),
         )
         .agg(
-            F.countDistinct(tbls["fact_pedido"]["id_pedido_origen"]).alias("total_pedidos"),
+            F.countDistinct(F.col("id_pedido_origen")).alias("total_pedidos"),
             F.sum("cantidad").alias("unidades_vendidas"),
             F.round(F.sum("subtotal"), 2).alias("ingresos"),
-            F.round(F.avg("precio_unitario"), 2).alias("precio_promedio"),
+            F.round(F.avg("precio_unitario_venta"), 2).alias("precio_promedio"),
         )
     )
 
@@ -115,15 +129,15 @@ def analisis_top_platos_por_mes(tbls: dict):
     df_base = (
         tbls["fact_pedido"]
         .join(tbls["dim_tiempo"],       "id_tiempo")
-        .join(tbls["dim_plato"],         tbls["fact_pedido"]["id_plato"] == tbls["dim_plato"]["id"])
-        .join(tbls["dim_estado_pedido"], tbls["fact_pedido"]["id_estado_pedido"] == tbls["dim_estado_pedido"]["id"])
-        .filter(F.col("dim_estado_pedido.nombre") == "completado")
+        .join(tbls["dim_plato"],         "id_plato")
+        .join(tbls["dim_estado_pedido"], "id_estado_pedido")
+        .filter(F.col("estado_nombre") == "completado")
         .groupBy(
-            tbls["dim_tiempo"]["anio"],
-            tbls["dim_tiempo"]["mes"],
-            tbls["dim_tiempo"]["nombre_mes"],
-            tbls["dim_plato"]["nombre"].alias("plato"),
-            tbls["dim_plato"]["categoria"],
+            F.col("anio"),
+            F.col("mes"),
+            F.col("nombre_mes"),
+            F.col("nombre_plato").alias("plato"),
+            F.col("categoria"),
         )
         .agg(
             F.sum("cantidad").alias("unidades_vendidas"),
@@ -153,14 +167,10 @@ def analisis_categorias_crecimiento(tbls: dict):
     df = (
         tbls["fact_pedido"]
         .join(tbls["dim_tiempo"],        "id_tiempo")
-        .join(tbls["dim_plato"],          tbls["fact_pedido"]["id_plato"] == tbls["dim_plato"]["id"])
-        .join(tbls["dim_estado_pedido"],  tbls["fact_pedido"]["id_estado_pedido"] == tbls["dim_estado_pedido"]["id"])
-        .filter(F.col("dim_estado_pedido.nombre") == "completado")
-        .groupBy(
-            tbls["dim_plato"]["categoria"],
-            tbls["dim_tiempo"]["anio"],
-            tbls["dim_tiempo"]["mes"],
-        )
+        .join(tbls["dim_plato"],          "id_plato")
+        .join(tbls["dim_estado_pedido"],  "id_estado_pedido")
+        .filter(F.col("estado_nombre") == "completado")
+        .groupBy(F.col("categoria"), F.col("anio"), F.col("mes"))
         .agg(
             F.round(F.sum("subtotal"), 2).alias("ingresos"),
             F.sum("cantidad").alias("unidades_vendidas"),
@@ -184,24 +194,40 @@ def analisis_categorias_crecimiento(tbls: dict):
     return df
 
 
+import shutil
+
+HIVE_WAREHOUSE_PATH = os.environ.get("HIVE_WAREHOUSE_DIR", "/opt/hive/data/warehouse")
+
+
+def _force_clean_table(spark: SparkSession, nombre: str):
+    """
+    Elimina por completo una tabla: metadata en el metastore Y
+    directorio físico en disco. DROP TABLE solo no es suficiente
+    porque puede dejar el directorio huérfano si el commit previo
+    falló a medias, causando LOCATION_ALREADY_EXISTS en la próxima
+    corrida.
+    """
+    tabla_hive = f"restaurant_dw.{nombre}"
+    spark.sql(f"DROP TABLE IF EXISTS {tabla_hive}")
+
+    ruta_fisica = f"{HIVE_WAREHOUSE_PATH}/restaurant_dw.db/{nombre}"
+    if os.path.exists(ruta_fisica):
+        logger.info(f"Eliminando directorio huérfano: {ruta_fisica}")
+        shutil.rmtree(ruta_fisica, ignore_errors=True)
+
+
 def save_results(spark: SparkSession, dfs: dict):
     """
-    Guarda cada DataFrame como tabla Hive y como CSV exportable.
+    Guarda cada DataFrame como tabla Hive (consumida por Superset).
+    Limpia metadata Y filesystem antes de crear para evitar el error
+    LOCATION_ALREADY_EXISTS cuando la tabla ya existe de una
+    corrida anterior.
     """
-    os.makedirs(OUTPUT_PATH, exist_ok=True)
-
     for nombre, df in dfs.items():
         tabla_hive = f"restaurant_dw.{nombre}"
-        ruta_csv   = f"{OUTPUT_PATH}/{nombre}"
-
         logger.info(f"Guardando {tabla_hive} ...")
-
-        # Tabla Hive (para Superset y el DAG)
+        _force_clean_table(spark, nombre)
         df.write.mode("overwrite").saveAsTable(tabla_hive)
-
-        # CSV exportable (para el entregable)
-        df.coalesce(1).write.mode("overwrite").option("header", "true").csv(ruta_csv)
-
         logger.info(f"  → {df.count()} filas guardadas.")
 
 
