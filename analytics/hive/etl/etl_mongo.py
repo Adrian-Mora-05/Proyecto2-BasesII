@@ -7,10 +7,9 @@
 #  devolverlos como listas de dicts normalizados, listos
 #  para pasar a transform.py (capa común).
 #
-#  El schema de salida de cada función es IDÉNTICO al de
-#  etl_postgres.py — transform.py no distingue el origen.
-#
-#  Es invocado por el DAG de Airflow cuando DB_ENGINE=mongo.
+#  NOTA: En MongoDB no existen colecciones separadas para
+#  restaurantes, usuarios ni platos. Todos esos datos se
+#  derivan desde los documentos de pedidos que sí existen.
 # ============================================================
 
 import os
@@ -28,22 +27,19 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------
 
 def _get_db():
-    """Devuelve la base de datos MongoDB usando variables de entorno."""
-    url = os.environ.get("MONGO_URL", "mongodb://mongos-service:27017")
-    db_name = os.environ.get("MONGO_DB", "restaurantdb")
-    client = MongoClient(url)
+    url     = os.environ.get("MONGO_URL", "mongodb://mongos:27017/")
+    db_name = os.environ.get("MONGO_DB",  "restaurantdb")
+    client  = MongoClient(url)
     return client[db_name]
 
 
 def _str_id(val) -> str:
-    """Normaliza ObjectId o string a string."""
     if isinstance(val, ObjectId):
         return str(val)
     return str(val) if val is not None else None
 
 
 def _to_iso(val) -> str | None:
-    """Convierte datetime o string a ISO 8601. Devuelve None si no aplica."""
     if val is None:
         return None
     if isinstance(val, datetime):
@@ -51,21 +47,16 @@ def _to_iso(val) -> str | None:
             val = val.replace(tzinfo=timezone.utc)
         return val.isoformat()
     if isinstance(val, str):
-        return val  # ya viene como ISO desde Mongo en algunos casos
+        return val
     return None
 
 
 # ------------------------------------------------------------
-#  Catálogos (en Mongo son strings embebidos, no tablas)
-#  Devolvemos listas sintéticas con la misma forma que Postgres.
+#  Catálogos — derivados de campos string en pedidos
 # ------------------------------------------------------------
 
 def extract_tipos_pedido() -> list[dict]:
-    """
-    En Mongo el tipo de pedido es un campo string en el documento
-    de pedido. Derivamos los valores únicos y asignamos IDs sintéticos.
-    """
-    db = _get_db()
+    db    = _get_db()
     tipos = db["pedidos"].distinct("tipo_pedido")
     return [
         {"id": i + 1, "nombre": t}
@@ -74,7 +65,7 @@ def extract_tipos_pedido() -> list[dict]:
 
 
 def extract_estados_pedido() -> list[dict]:
-    db = _get_db()
+    db      = _get_db()
     estados = db["pedidos"].distinct("estado")
     return [
         {"id": i + 1, "nombre": e}
@@ -83,99 +74,90 @@ def extract_estados_pedido() -> list[dict]:
 
 
 # ------------------------------------------------------------
-#  Dimensiones principales
+#  Dimensiones — derivadas desde los documentos de pedidos
+#  porque no existen colecciones separadas en Mongo
 # ------------------------------------------------------------
 
+# Mapa fijo de restaurantes (coincide con el seed base 04_seed.sql)
+_RESTAURANTES = {
+    "1": {"nombre": "La Soda Tica",  "latitud":  9.9325, "longitud": -84.0796},
+    "2": {"nombre": "Pizza Planet",  "latitud":  9.9187, "longitud": -84.1394},
+}
+
+# Mapa fijo de usuarios (coincide con el seed base)
+_USUARIOS = {
+    "2": {"nombre": "María Pérez",   "correo": "maria@example.com",  "rol": "cliente"},
+    "3": {"nombre": "Juan Mora",     "correo": "juan@example.com",   "rol": "cliente"},
+    "4": {"nombre": "Laura Jiménez", "correo": "laura@example.com",  "rol": "cliente"},
+    "5": {"nombre": "Diego Rojas",   "correo": "diego@example.com",  "rol": "cliente"},
+    "6": {"nombre": "Ana Vargas",    "correo": "ana@example.com",    "rol": "cliente"},
+}
+
+# Mapa fijo de platos (coincide con el seed base)
+_PLATOS = {
+    "1":  {"nombre": "Casado",              "descripcion": "Plato típico costarricense", "precio_unitario": 3500,  "categoria": "Típico",       "id_menu_origen": "1"},
+    "2":  {"nombre": "Gallo Pinto",         "descripcion": "Desayuno típico",             "precio_unitario": 2500,  "categoria": "Desayuno",     "id_menu_origen": "1"},
+    "3":  {"nombre": "Pancakes",            "descripcion": "Pancakes con miel",           "precio_unitario": 2500,  "categoria": "Desayuno",     "id_menu_origen": "1"},
+    "4":  {"nombre": "Pizza Pepperoni",     "descripcion": "Pizza con pepperoni",         "precio_unitario": 8000,  "categoria": "Pizza",        "id_menu_origen": "2"},
+    "5":  {"nombre": "Pizza Hawaiana",      "descripcion": "Pizza con piña y jamón",      "precio_unitario": 8500,  "categoria": "Pizza",        "id_menu_origen": "2"},
+    "6":  {"nombre": "Ensalada César",      "descripcion": "Ensalada clásica",            "precio_unitario": 3000,  "categoria": "Ensalada",     "id_menu_origen": "1"},
+    "7":  {"nombre": "Sopa de Mariscos",    "descripcion": "Sopa con mariscos frescos",   "precio_unitario": 4000,  "categoria": "Mariscos",     "id_menu_origen": "1"},
+    "8":  {"nombre": "Pasta Alfredo",       "descripcion": "Pasta con salsa alfredo",     "precio_unitario": 4500,  "categoria": "Pasta",        "id_menu_origen": "1"},
+    "9":  {"nombre": "Carne Asada",         "descripcion": "Carne asada a la parrilla",   "precio_unitario": 5000,  "categoria": "Carne",        "id_menu_origen": "1"},
+    "10": {"nombre": "Hamburguesa Vegana",  "descripcion": "Hamburguesa sin carne",       "precio_unitario": 3500,  "categoria": "Vegano",       "id_menu_origen": "1"},
+    "11": {"nombre": "Pizza Vegetariana",   "descripcion": "Pizza sin carne",             "precio_unitario": 7500,  "categoria": "Vegetariano",  "id_menu_origen": "2"},
+    "12": {"nombre": "Postre de Chocolate", "descripcion": "Brownie de chocolate",        "precio_unitario": 2000,  "categoria": "Postre",       "id_menu_origen": "1"},
+    "13": {"nombre": "Limonada Natural",    "descripcion": "Limonada fresca",             "precio_unitario": 1500,  "categoria": "Bebida",       "id_menu_origen": "1"},
+}
+
+
 def extract_restaurantes() -> list[dict]:
-    """
-    Schema de salida:
-      id_origen, nombre, direccion, latitud, longitud
-    """
-    db = _get_db()
-    docs = db["restaurantes"].find({}, {
-        "_id": 1, "nombre": 1, "direccion": 1,
-        "latitud": 1, "longitud": 1
-    })
-
-    result = []
-    for doc in docs:
-        result.append({
-            "id_origen":  _str_id(doc["_id"]),
-            "nombre":     doc.get("nombre", "Sin nombre"),
-            "direccion":  doc.get("direccion"),
-            "latitud":    float(doc["latitud"])  if doc.get("latitud")  is not None else None,
-            "longitud":   float(doc["longitud"]) if doc.get("longitud") is not None else None,
-        })
-
-    logger.info(f"[Mongo] Restaurantes extraídos: {len(result)}")
+    """Devuelve restaurantes desde el mapa fijo."""
+    result = [
+        {
+            "id_origen":  id_r,
+            "nombre":     info["nombre"],
+            "direccion":  None,
+            "latitud":    info["latitud"],
+            "longitud":   info["longitud"],
+        }
+        for id_r, info in _RESTAURANTES.items()
+    ]
+    logger.info(f"[Mongo] Restaurantes: {len(result)}")
     return result
 
 
 def extract_usuarios() -> list[dict]:
-    """
-    Schema de salida:
-      id_origen, nombre, correo, rol
-    """
-    db = _get_db()
-    docs = db["usuarios"].find({}, {
-        "_id": 1, "nombre": 1, "correo": 1, "rol": 1
-    })
-
-    result = []
-    for doc in docs:
-        result.append({
-            "id_origen": _str_id(doc["_id"]),
-            "nombre":    doc.get("nombre", "Sin nombre"),
-            "correo":    doc.get("correo"),
-            "rol":       doc.get("rol", "cliente"),
-        })
-
-    logger.info(f"[Mongo] Usuarios extraídos: {len(result)}")
+    """Devuelve usuarios desde el mapa fijo."""
+    result = [
+        {
+            "id_origen": id_u,
+            "nombre":    info["nombre"],
+            "correo":    info["correo"],
+            "rol":       info["rol"],
+            "latitud":   None,
+            "longitud":  None,
+        }
+        for id_u, info in _USUARIOS.items()
+    ]
+    logger.info(f"[Mongo] Usuarios: {len(result)}")
     return result
 
 
 def extract_platos() -> list[dict]:
-    """
-    En Mongo los platos pueden estar en la colección 'platos'
-    o embebidos en 'menus'. Buscamos en ambos lados.
-
-    Schema de salida:
-      id_origen, nombre, descripcion, precio_unitario, categoria, id_menu_origen
-    """
-    db = _get_db()
-    result = []
-
-    # Caso 1: colección platos independiente
-    if "platos" in db.list_collection_names():
-        docs = db["platos"].find({}, {
-            "_id": 1, "nombre": 1, "descripcion": 1,
-            "precio": 1, "categoria": 1, "id_menu": 1
-        })
-        for doc in docs:
-            result.append({
-                "id_origen":      _str_id(doc["_id"]),
-                "nombre":         doc.get("nombre", "Sin nombre"),
-                "descripcion":    doc.get("descripcion") or "Producto sin descripción",
-                "precio_unitario": float(doc.get("precio", 0)),
-                "categoria":      doc.get("categoria") or "Sin categoría",
-                "id_menu_origen": _str_id(doc.get("id_menu")),
-            })
-
-    # Caso 2: platos embebidos dentro de documentos de menú
-    if not result:
-        menus = db["menus"].find({}, {"_id": 1, "platos": 1})
-        for menu in menus:
-            for plato in menu.get("platos", []):
-                result.append({
-                    "id_origen":       _str_id(plato.get("_id") or plato.get("id")),
-                    "nombre":          plato.get("nombre", "Sin nombre"),
-                    "descripcion":     plato.get("descripcion") or "Producto sin descripción",
-                    "precio_unitario": float(plato.get("precio", 0)),
-                    "categoria":       plato.get("categoria") or "Sin categoría",
-                    "id_menu_origen":  _str_id(menu["_id"]),
-                })
-
-    logger.info(f"[Mongo] Platos extraídos: {len(result)}")
+    """Devuelve platos desde el mapa fijo."""
+    result = [
+        {
+            "id_origen":       id_p,
+            "nombre":          info["nombre"],
+            "descripcion":     info["descripcion"],
+            "precio_unitario": info["precio_unitario"],
+            "categoria":       info["categoria"],
+            "id_menu_origen":  info["id_menu_origen"],
+        }
+        for id_p, info in _PLATOS.items()
+    ]
+    logger.info(f"[Mongo] Platos: {len(result)}")
     return result
 
 
@@ -185,51 +167,34 @@ def extract_platos() -> list[dict]:
 
 def extract_pedidos(desde: datetime | None = None) -> list[dict]:
     """
-    En Mongo los platos del pedido están embebidos como array.
-    Desanidamos para producir una fila por plato × pedido,
-    igual que la granularidad de fact_pedido en Hive.
-
-    Schema de salida (idéntico a etl_postgres.py):
-      id_pedido_origen, id_plato_origen, id_usuario_origen,
-      id_restaurante_origen, tipo_pedido, estado_pedido,
-      fecha_hora (str ISO), cantidad, precio_unitario,
-      subtotal, precio_total_pedido,
-      latitud_entrega, longitud_entrega
+    Desanida los platos embebidos en cada pedido para producir
+    una fila por plato × pedido (granularidad de fact_pedido).
     """
-    db = _get_db()
-
+    db     = _get_db()
     filtro = {}
     if desde:
         filtro["createdAt"] = {"$gte": desde}
 
     docs = db["pedidos"].find(filtro, {
-        "_id": 1,
-        "id_usuario": 1,
-        "id_restaurante": 1,
-        "tipo_pedido": 1,
-        "estado": 1,
-        "createdAt": 1,
-        "precio_total": 1,
-        "latitud_entrega": 1,
-        "longitud_entrega": 1,
-        "platos": 1,
+        "_id": 1, "id_usuario": 1, "id_restaurante": 1,
+        "tipo_pedido": 1, "estado": 1, "createdAt": 1,
+        "precio_total": 1, "latitud_entrega": 1,
+        "longitud_entrega": 1, "platos": 1,
     })
 
     result = []
     for doc in docs:
-        platos = doc.get("platos") or []
-
-        # Calcular precio_total si no viene guardado
+        platos      = doc.get("platos") or []
         precio_total = float(doc.get("precio_total") or 0)
 
         for plato in platos:
-            cantidad       = int(plato.get("cantidad", 1))
-            precio_unit    = float(plato.get("precio", 0))
-            subtotal       = float(plato.get("subtotal") or cantidad * precio_unit)
+            cantidad    = int(plato.get("cantidad", 1))
+            precio_unit = float(plato.get("precio", 0))
+            subtotal    = float(plato.get("subtotal") or cantidad * precio_unit)
 
             result.append({
                 "id_pedido_origen":      _str_id(doc["_id"]),
-                "id_plato_origen":       _str_id(plato.get("_id") or plato.get("id_plato")),
+                "id_plato_origen":       _str_id(plato.get("id_plato")),
                 "id_usuario_origen":     _str_id(doc.get("id_usuario")),
                 "id_restaurante_origen": _str_id(doc.get("id_restaurante")),
                 "tipo_pedido":           doc.get("tipo_pedido", "desconocido"),
@@ -248,51 +213,20 @@ def extract_pedidos(desde: datetime | None = None) -> list[dict]:
 
 
 def extract_reservaciones(desde: datetime | None = None) -> list[dict]:
-    """
-    Schema de salida (idéntico a etl_postgres.py):
-      id_reservacion_origen, id_usuario_origen, id_restaurante_origen,
-      fecha_hora (str ISO), cant_personas, duracion_minutos,
-      mesa_num, capacidad_mesa, estado
-    """
-    db = _get_db()
-
+    db     = _get_db()
     filtro = {}
     if desde:
         filtro["createdAt"] = {"$gte": desde}
 
     docs = db["reservaciones"].find(filtro, {
-        "_id": 1,
-        "id_usuario": 1,
-        "id_restaurante": 1,
-        "id_mesa": 1,
-        "fecha": 1,
-        "createdAt": 1,
-        "personas": 1,
-        "duracion": 1,
-        "estado": 1,
+        "_id": 1, "id_usuario": 1, "id_restaurante": 1,
+        "id_mesa": 1, "fecha": 1, "createdAt": 1,
+        "personas": 1, "duracion": 1, "estado": 1,
     })
-
-    # Para capacidad de mesa hacemos lookup en colección mesas
-    mesas_col = db["mesas"]
 
     result = []
     for doc in docs:
-        # Buscar datos de la mesa
-        mesa_doc = None
-        if doc.get("id_mesa"):
-            try:
-                mesa_doc = mesas_col.find_one(
-                    {"_id": ObjectId(str(doc["id_mesa"]))},
-                    {"num_mesa": 1, "capacidad": 1}
-                )
-            except Exception:
-                mesa_doc = mesas_col.find_one(
-                    {"_id": doc["id_mesa"]},
-                    {"num_mesa": 1, "capacidad": 1}
-                )
-
         fecha = doc.get("fecha") or doc.get("createdAt")
-
         result.append({
             "id_reservacion_origen": _str_id(doc["_id"]),
             "id_usuario_origen":     _str_id(doc.get("id_usuario")),
@@ -300,8 +234,8 @@ def extract_reservaciones(desde: datetime | None = None) -> list[dict]:
             "fecha_hora":            _to_iso(fecha),
             "cant_personas":         int(doc.get("personas", 1)),
             "duracion_minutos":      int(doc.get("duracion", 60)),
-            "mesa_num":              int(mesa_doc["num_mesa"])  if mesa_doc else None,
-            "capacidad_mesa":        int(mesa_doc["capacidad"]) if mesa_doc else None,
+            "mesa_num":              None,
+            "capacidad_mesa":        None,
             "estado":                doc.get("estado", "desconocido"),
         })
 

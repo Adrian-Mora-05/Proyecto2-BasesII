@@ -63,7 +63,7 @@ def branch_engine(**context):
     """
     engine = DB_ENGINE.strip().lower()
     logger.info(f"DB_ENGINE={engine}")
-    if engine == "mongo":
+    if engine == "mongodb":
         return "extract_mongo"
     return "extract_postgres"
 

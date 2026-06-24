@@ -139,8 +139,8 @@ CREATE TABLE IF NOT EXISTS fact_pedido (
     id_estado_pedido    BIGINT,
 
     -- Trazabilidad al OLTP
-    id_pedido_origen    INT,
-    id_plato_origen     INT,
+    id_pedido_origen    STRING,
+    id_plato_origen     STRING,
 
     -- Métricas
     cantidad            INT,

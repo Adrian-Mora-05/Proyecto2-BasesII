@@ -470,7 +470,7 @@ def insertar_mongo(pedidos: list[dict], reservaciones: list[dict]):
             ],
         }
         ops_pedidos.append(
-            UpdateOne({"_seed_id": p["id"]}, {"$setOnInsert": doc}, upsert=True)
+            UpdateOne({"_seed_id": p["id"], "id_restaurante": str(p["id_restaurante"])}, {"$setOnInsert": doc}, upsert=True)
         )
 
     if ops_pedidos:
@@ -492,7 +492,7 @@ def insertar_mongo(pedidos: list[dict], reservaciones: list[dict]):
             "estado":         "reservada" if r["id_estado_reservacion"] == 1 else "cancelada",
         }
         ops_res.append(
-            UpdateOne({"_seed_id": r["id"]}, {"$setOnInsert": doc}, upsert=True)
+            UpdateOne({"_seed_id": r["id"], "id_restaurante": str(r["id_restaurante"])}, {"$setOnInsert": doc}, upsert=True)
         )
 
     if ops_res:
@@ -564,7 +564,7 @@ def main():
 
     imprimir_resumen(pedidos, reservaciones)
 
-    if DB_ENGINE == "mongo":
+    if DB_ENGINE == "mongodb":
         insertar_mongo(pedidos, reservaciones)
     else:
         insertar_postgres(pedidos, reservaciones)

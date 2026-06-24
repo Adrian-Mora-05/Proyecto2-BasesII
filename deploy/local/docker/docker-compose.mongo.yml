@@ -1,8 +1,5 @@
 services:
 
-  # ════════════════════════════════════════════════════════════════
-  #  CONFIG SERVERS
-  # ════════════════════════════════════════════════════════════════
   configsvr1:
     image: mongo:7
     container_name: configsvr1
@@ -13,7 +10,8 @@ services:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 30
+      start_period: 30s
 
   configsvr2:
     image: mongo:7
@@ -25,7 +23,8 @@ services:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 30
+      start_period: 30s
 
   configsvr3:
     image: mongo:7
@@ -37,11 +36,9 @@ services:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 30
+      start_period: 30s
 
-  # ════════════════════════════════════════════════════════════════
-  #  SHARD 1
-  # ════════════════════════════════════════════════════════════════
   shard1-primary:
     image: mongo:7
     container_name: shard1-primary
@@ -52,7 +49,8 @@ services:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 30
+      start_period: 30s
 
   shard1-secondary1:
     image: mongo:7
@@ -64,7 +62,9 @@ services:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 30
+      start_period: 30s
+
 
   shard1-secondary2:
     image: mongo:7
@@ -76,33 +76,10 @@ services:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 30
+      start_period: 30s
 
-  # ════════════════════════════════════════════════════════════════
-  #  MONGOS — Router de queries
-  # ════════════════════════════════════════════════════════════════
-  mongos:
-    image: mongo:7
-    container_name: mongos
-    command: >
-      mongos
-      --configdb configReplSet/configsvr1:27017,configsvr2:27017,configsvr3:27017
-      --bind_ip_all
-      --port 27017
-    ports:
-      - "27017:27017"
-    depends_on:
-      mongo-init:
-        condition: service_completed_successfully
-    healthcheck:
-      test: ["CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
 
-  # ════════════════════════════════════════════════════════════════
-  #  INIT JOB
-  # ════════════════════════════════════════════════════════════════
   mongo-init:
     image: mongo:7
     container_name: mongo-init
@@ -125,28 +102,40 @@ services:
 
         echo '=== 1. Inicializando Config Server Replica Set ===' &&
         mongosh --host configsvr1:27017 --eval '
-          rs.initiate({
-            _id: \"configReplSet\",
-            configsvr: true,
-            members: [
-              { _id: 0, host: \"configsvr1:27017\" },
-              { _id: 1, host: \"configsvr2:27017\" },
-              { _id: 2, host: \"configsvr3:27017\" }
-            ]
-          })
+          try {
+            rs.initiate({
+              _id: \"configReplSet\",
+              configsvr: true,
+              members: [
+                { _id: 0, host: \"configsvr1:27017\" },
+                { _id: 1, host: \"configsvr2:27017\" },
+                { _id: 2, host: \"configsvr3:27017\" }
+              ]
+            });
+          } catch(e) {
+            if (e.codeName === \"AlreadyInitialized\") {
+              print(\"Config RS ya inicializado, continuando...\");
+            } else { throw e; }
+          }
         ' &&
         sleep 5 &&
 
         echo '=== 2. Inicializando Shard rs0 ===' &&
         mongosh --host shard1-primary:27017 --eval '
-          rs.initiate({
-            _id: \"rs0\",
-            members: [
-              { _id: 0, host: \"shard1-primary:27017\",    priority: 2 },
-              { _id: 1, host: \"shard1-secondary1:27017\", priority: 1 },
-              { _id: 2, host: \"shard1-secondary2:27017\", priority: 1 }
-            ]
-          })
+          try {
+            rs.initiate({
+              _id: \"rs0\",
+              members: [
+                { _id: 0, host: \"shard1-primary:27017\",    priority: 2 },
+                { _id: 1, host: \"shard1-secondary1:27017\", priority: 1 },
+                { _id: 2, host: \"shard1-secondary2:27017\", priority: 1 }
+              ]
+            });
+          } catch(e) {
+            if (e.codeName === \"AlreadyInitialized\") {
+              print(\"Shard RS ya inicializado, continuando...\");
+            } else { throw e; }
+          }
         ' &&
         sleep 10 &&
 
@@ -156,21 +145,39 @@ services:
 
         echo '=== 4. Registrando el shard ===' &&
         mongosh --port 27020 --eval '
-          sh.addShard(\"rs0/shard1-primary:27017,shard1-secondary1:27017,shard1-secondary2:27017\")
+          try {
+            sh.addShard(\"rs0/shard1-primary:27017,shard1-secondary1:27017,shard1-secondary2:27017\");
+          } catch(e) {
+            if (e.code === 23 || e.codeName === \"ShardAlreadyExists\") {
+              print(\"Shard ya registrado, continuando...\");
+            } else { throw e; }
+          }
         ' &&
 
         echo '=== 5. Habilitando sharding ===' &&
         mongosh --port 27020 --eval '
-          sh.enableSharding(\"restaurantdb\")
+          try {
+            sh.enableSharding(\"restaurantdb\");
+          } catch(e) {
+            if (e.codeName === \"AlreadyInitialized\" || e.code === 23) {
+              print(\"Sharding ya habilitado, continuando...\");
+            } else { throw e; }
+          }
         ' &&
 
         echo '=== 6. Configurando shard keys ===' &&
         mongosh --port 27020 --eval '
-          sh.shardCollection(\"restaurantdb.pedidos\", { id_restaurante: \"hashed\" });
-          sh.shardCollection(\"restaurantdb.reservaciones\", { id_restaurante: \"hashed\" });
-          db.getSiblingDB(\"restaurantdb\").pedidos.createIndex({ id_restaurante: 1, createdAt: -1 });
-          db.getSiblingDB(\"restaurantdb\").reservaciones.createIndex({ id_restaurante: 1, fecha: 1 });
-          db.getSiblingDB(\"restaurantdb\").menus.createIndex({ id_restaurante: 1 });
+          try {
+            sh.shardCollection(\"restaurantdb.pedidos\", { id_restaurante: \"hashed\" });
+          } catch(e) { print(\"pedidos: \" + e.message); }
+          try {
+            sh.shardCollection(\"restaurantdb.reservaciones\", { id_restaurante: \"hashed\" });
+          } catch(e) { print(\"reservaciones: \" + e.message); }
+          try {
+            db.getSiblingDB(\"restaurantdb\").pedidos.createIndex({ id_restaurante: 1, createdAt: -1 });
+            db.getSiblingDB(\"restaurantdb\").reservaciones.createIndex({ id_restaurante: 1, fecha: 1 });
+            db.getSiblingDB(\"restaurantdb\").menus.createIndex({ id_restaurante: 1 });
+          } catch(e) { print(\"Indices: \" + e.message); }
           print(\"Sharding configurado correctamente\");
         ' &&
 
@@ -178,7 +185,26 @@ services:
       "
     restart: "no"
 
-  # ── Keycloak ──────────────────────────────────────────────────────
+  mongos:
+    image: mongo:7
+    container_name: mongos
+    command: >
+      mongos
+      --configdb configReplSet/configsvr1:27017,configsvr2:27017,configsvr3:27017
+      --bind_ip_all
+      --port 27017
+    ports:
+      - "27017:27017"
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
   keycloak:
     image: quay.io/keycloak/keycloak:24.0
     container_name: keycloak
@@ -192,7 +218,6 @@ services:
       KC_HOSTNAME_STRICT: ${KC_HOSTNAME_STRICT:-"false"}
       KC_HEALTH_ENABLED: "true"
     volumes:
-      # keycloak/ está dentro de deploy/local/
       - ./deploy/local/keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
     command: ["start-dev", "--import-realm"]
     ports:
@@ -204,7 +229,6 @@ services:
       retries: 15
       start_period: 60s
 
-  # ── Redis ─────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: redis
@@ -222,7 +246,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # ── ElasticSearch ─────────────────────────────────────────────────
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.13.0
     container_name: elasticsearch
@@ -238,10 +261,9 @@ services:
       test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
       interval: 15s
       timeout: 10s
-      retries: 10
+      retries: 30
       start_period: 30s
 
-  # ── API principal ─────────────────────────────────────────────────
   api:
     build: ./api
     depends_on:
@@ -265,7 +287,6 @@ services:
       KEYCLOAK_ADMIN_CLIENT_ID: ${KEYCLOAK_ADMIN_CLIENT_ID:-admin-cli}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
 
-  # ── Search service ────────────────────────────────────────────────
   search:
     build: ./search-service
     depends_on:
@@ -282,7 +303,6 @@ services:
       MONGO_DB: ${MONGO_DB:-restaurantdb}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
 
-  # ── Nginx ─────────────────────────────────────────────────────────
   nginx:
     image: nginx:alpine
     depends_on:
@@ -291,7 +311,6 @@ services:
     ports:
       - "80:80"
     volumes:
-      # nginx/ está dentro de deploy/local/
       - ./deploy/local/nginx/nginx.mongo.conf:/etc/nginx/nginx.conf:ro
 
 volumes:

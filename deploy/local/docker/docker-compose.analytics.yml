@@ -29,7 +29,7 @@ x-airflow-common: &airflow-common
     DB_USER:          ${POSTGRES_USER:-postgres}
     DB_PASSWORD:      ${POSTGRES_PASSWORD:-postgres}
     DB_NAME:          ${RESTAURANT_DB:-restaurantdb}
-    MONGO_URL:        ${MONGO_URL:-mongodb://mongo1:27017,mongo2:27017,mongo3:27017/?replicaSet=rs0}
+    MONGO_URL:        ${MONGO_URL:-mongodb://mongos:27017/}
     MONGO_DB:         ${MONGO_DB:-restaurantdb}
     HIVE_HOST:        hive-server
     HIVE_PORT:        "10000"
