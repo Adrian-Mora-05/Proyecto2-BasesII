@@ -83,7 +83,7 @@ async function asegurarGrafoProyectado(session) {
 export async function obtenerCaminoMinimo(origenId, destinoId, criterio = 'distancia_km') {
   const session = getSession();
   try {
-    await asegurarGrafoProyectado(session);
+    
 
     const result = await session.run(`
       MATCH (inicio:Ubicacion { id: $origen })
@@ -130,7 +130,7 @@ export async function obtenerDistancia(origenId, destinoId) {
     }
 
     // Intento 2 — Dijkstra si no hay conexión directa
-    await asegurarGrafoProyectado(session);
+    
 
     const dijkstra = await session.run(`
       MATCH (inicio:Ubicacion { id: $origen })
@@ -167,6 +167,66 @@ export async function obtenerUbicaciones() {
       id:     r.get('id'),
       nombre: r.get('nombre'),
     }));
+  } finally {
+    await session.close();
+  }
+}
+
+// ── Camino completo con paradas intermedias ──────────────────────
+// A diferencia de obtenerDistancia() que solo devuelve el número,
+// esta función devuelve el camino completo: todos los nodos por
+// los que pasa el repartidor para ir de un punto a otro.
+
+export async function obtenerCaminoCompleto(origenId, destinoId) {
+  const session = getSession();
+  try {
+    
+
+    // Intento 1 — conexión directa (no hay paradas intermedias)
+    const directa = await session.run(`
+      MATCH (a:Ubicacion { id: $origen })-[c:CONECTA]-(b:Ubicacion { id: $destino })
+      RETURN c.distancia_km AS distancia
+    `, { origen: origenId, destino: destinoId });
+
+    if (directa.records.length > 0) {
+      return {
+        paradas: [origenId, destinoId],
+        distancia_km: directa.records[0].get('distancia'),
+        conexion_directa: true
+      };
+    }
+
+    // Intento 2 — Dijkstra con paradas intermedias
+    const result = await session.run(`
+      MATCH (inicio:Ubicacion { id: $origen })
+      MATCH (fin:Ubicacion    { id: $destino })
+      CALL gds.shortestPath.dijkstra.stream('rutasGraph', {
+        sourceNode: inicio,
+        targetNode: fin,
+        relationshipWeightProperty: 'distancia_km'
+      })
+      YIELD nodeIds, costs
+      RETURN
+        [id IN nodeIds | gds.util.asNode(id).id]     AS paradas,
+        [id IN nodeIds | gds.util.asNode(id).nombre] AS nombresParadas,
+        costs[-1] AS distancia_km
+    `, { origen: origenId, destino: destinoId });
+
+    if (result.records.length === 0) {
+      return {
+        paradas: [origenId, destinoId],
+        distancia_km: 9999,
+        conexion_directa: false
+      };
+    }
+
+    return {
+      paradas:         result.records[0].get('paradas'),
+      nombresParadas:  result.records[0].get('nombresParadas'),
+      distancia_km:    result.records[0].get('distancia_km'),
+      conexion_directa: false
+    };
+
   } finally {
     await session.close();
   }

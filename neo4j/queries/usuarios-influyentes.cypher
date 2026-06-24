@@ -7,7 +7,10 @@
 // En este proyecto son simuladas porque el sistema no tiene
 // un módulo de recomendaciones real. En producción vendrían
 // de datos reales como referidos o invitaciones.
-//
+//(Usuario)-[HIZO]->(Pedido)
+//(Pedido)-[CONTIENE]->(Plato)
+//(Pedido)-[ES_DE]->(Restaurante)
+//(Usuario)-[RECOMIENDA]->(Usuario)
 // Cómo correrla en Neo4J Browser:
 //   Copiar y pegar en http://localhost:7474
 

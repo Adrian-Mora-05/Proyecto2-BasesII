@@ -5,7 +5,62 @@
 // de vecino más cercano para optimizar el orden de visita.
 
 import { leerPedidosPendientes } from '../config/db.js';
-import { obtenerDistancia, obtenerUbicaciones } from './grafos.service.js';
+import { obtenerDistancia, obtenerUbicaciones, obtenerCaminoCompleto } from './grafos.service.js';
+
+
+// ── Algoritmo de Vecino Más Cercano — versión con ruta detallada ──
+
+async function vecinoMasCercano(ubicacionInicial, pedidos) {
+  const pendientes = [...pedidos];
+  const ruta = [];
+  let actual = ubicacionInicial;
+  let distanciaTotal = 0;
+
+  while (pendientes.length > 0) {
+    let masCercano = null;
+    let menorDistancia = Infinity;
+    let indiceMasCercano = -1;
+    let mejorCamino = null;
+
+    // Buscar el pedido más cercano desde la ubicación actual
+    for (let i = 0; i < pendientes.length; i++) {
+      const camino = await obtenerCaminoCompleto(actual, pendientes[i].ubicacion);
+      if (camino.distancia_km < menorDistancia) {
+        menorDistancia   = camino.distancia_km;
+        masCercano       = pendientes[i];
+        indiceMasCercano = i;
+        mejorCamino      = camino;
+      }
+    }
+
+    // Agregar la parada con el camino detallado
+    ruta.push({
+      // Datos del pedido
+      id_pedido:              masCercano.id_pedido,
+      cliente:                masCercano.cliente || `Usuario ${masCercano.id_usuario}`,
+      ubicacion_destino:      masCercano.ubicacion,
+
+      // Ruta detallada desde la parada anterior hasta este destino
+      ruta_detallada: {
+        desde:              actual,
+        hasta:              masCercano.ubicacion,
+        paradas_intermedias: mejorCamino.paradas,
+        distancia_km:       Number(mejorCamino.distancia_km.toFixed(1)),
+        conexion_directa:   mejorCamino.conexion_directa,
+      }
+    });
+
+    distanciaTotal += mejorCamino.distancia_km;
+    actual = masCercano.ubicacion;
+    pendientes.splice(indiceMasCercano, 1);
+  }
+
+  return {
+    ruta,
+    distanciaTotal: Number(distanciaTotal.toFixed(1))
+  };
+}
+
 
 // ── Asignar una ubicación simulada a cada pedido ────────────────────
 // Como no hay geolocalización real de clientes, se simula
@@ -40,35 +95,36 @@ function distribuirPedidos(pedidos, repartidores) {
 
 // ── Algoritmo de Vecino Más Cercano ─────────────────────────────────
 
-async function vecinoMasCercano(ubicacionInicial, pedidos) {
-  const pendientes = [...pedidos];
-  const ruta = [];
-  let actual = ubicacionInicial;
-  let distanciaTotal = 0;
+//async function vecinoMasCercano(ubicacionInicial, pedidos) {
+  //const pendientes = [...pedidos];
+  //const ruta = [];
+  //let actual = ubicacionInicial;
+  //let distanciaTotal = 0;
 
-  while (pendientes.length > 0) {
-    let masCercano = null;
-    let menorDistancia = Infinity;
-    let indiceMasCercano = -1;
+  //while (pendientes.length > 0) {
+    //let masCercano = null;
+    //let menorDistancia = Infinity;
+    //let indiceMasCercano = -1;
 
-    for (let i = 0; i < pendientes.length; i++) {
-      const distancia = await obtenerDistancia(actual, pendientes[i].ubicacion);
-      if (distancia < menorDistancia) {
-        menorDistancia   = distancia;
-        masCercano       = pendientes[i];
-        indiceMasCercano = i;
-      }
-    }
+    //for (let i = 0; i < pendientes.length; i++) {
+      //const distancia = await obtenerDistancia(actual, pendientes[i].ubicacion);
+      //if (distancia < menorDistancia) {
+        //menorDistancia   = distancia;
+        //masCercano       = pendientes[i];
+        //indiceMasCercano = i;
+      //}
+    //}
 
-    ruta.push({ ...masCercano, distanciaDesdeAnterior: menorDistancia });
-    distanciaTotal += menorDistancia;
-    actual = masCercano.ubicacion;
+    //ruta.push({ ...masCercano, distanciaDesdeAnterior: menorDistancia });
+    //distanciaTotal += menorDistancia;
+    //actual = masCercano.ubicacion;
 
-    pendientes.splice(indiceMasCercano, 1);
-  }
+    //pendientes.splice(indiceMasCercano, 1);
+  //}
 
-  return { ruta, distanciaTotal };
-}
+  //return { ruta, distanciaTotal };
+//}
+
 
 // ── Función principal — orquesta todo el proceso ────────────────────
 
