@@ -1,5 +1,5 @@
 -- ============================================================
---  VISTAS OLAP — 5 cubos 
+--  VISTAS OLAP — 5 cubos requeridos
 --  Proyecto: Reserva Inteligente de Restaurantes — Etapa 3
 --  Base de datos Hive: restaurant_dw
 --  Ejecutar DESPUÉS de 01_star_schema.hql
@@ -39,13 +39,35 @@ GROUP BY
 --  Cubo 2: Actividad de clientes por zona geográfica
 --  → Dashboard: "Actividad de clientes por zona geográfica"
 --  → Análisis: distribución geográfica de la demanda
+--
+--  NOTA: dim_usuario.zona_geografica no se usa porque la tabla
+--  usuario en el OLTP no almacena coordenadas del cliente.
+--  En su lugar, derivamos la "zona del cliente" a partir de las
+--  coordenadas de entrega de cada pedido (fact_pedido), que sí
+--  reflejan dónde solicitó el cliente que le llevaran el pedido.
+--  Las mismas reglas de zona que usa transform.py (_zona_geografica).
 -- ============================================================
 CREATE OR REPLACE VIEW v_actividad_zona AS
 SELECT
     t.anio,
     t.mes,
     t.nombre_mes,
-    u.zona_geografica                       AS zona_cliente,
+    CASE
+        WHEN f.latitud_entrega IS NULL OR f.longitud_entrega IS NULL THEN 'Desconocida'
+        WHEN f.latitud_entrega BETWEEN 9.90 AND 9.96
+         AND f.longitud_entrega BETWEEN -84.10 AND -84.04 THEN 'San José Centro'
+        WHEN f.latitud_entrega BETWEEN 9.88 AND 9.93
+         AND f.longitud_entrega BETWEEN -84.16 AND -84.12 THEN 'Escazú'
+        WHEN f.latitud_entrega BETWEEN 9.93 AND 9.98
+         AND f.longitud_entrega BETWEEN -84.12 AND -84.06 THEN 'Santa Ana'
+        WHEN f.latitud_entrega BETWEEN 9.85 AND 9.92
+         AND f.longitud_entrega BETWEEN -83.95 AND -83.88 THEN 'Cartago Centro'
+        WHEN f.latitud_entrega BETWEEN 9.98 AND 10.02
+         AND f.longitud_entrega BETWEEN -84.12 AND -84.06 THEN 'Heredia Centro'
+        WHEN f.latitud_entrega BETWEEN 10.00 AND 10.05
+         AND f.longitud_entrega BETWEEN -84.23 AND -84.17 THEN 'Alajuela Centro'
+        ELSE 'Otra zona'
+    END                                      AS zona_cliente,
     r.zona_geografica                       AS zona_restaurante,
     r.nombre                                AS restaurante,
     COUNT(DISTINCT f.id_usuario)            AS clientes_unicos,
@@ -54,11 +76,25 @@ SELECT
     ROUND(AVG(f.precio_total_pedido), 2)    AS ticket_promedio
 FROM fact_pedido f
 JOIN dim_tiempo         t   ON f.id_tiempo       = t.id
-JOIN dim_usuario        u   ON f.id_usuario      = u.id
 JOIN dim_restaurante    r   ON f.id_restaurante  = r.id
 GROUP BY
     t.anio, t.mes, t.nombre_mes,
-    u.zona_geografica,
+    CASE
+        WHEN f.latitud_entrega IS NULL OR f.longitud_entrega IS NULL THEN 'Desconocida'
+        WHEN f.latitud_entrega BETWEEN 9.90 AND 9.96
+         AND f.longitud_entrega BETWEEN -84.10 AND -84.04 THEN 'San José Centro'
+        WHEN f.latitud_entrega BETWEEN 9.88 AND 9.93
+         AND f.longitud_entrega BETWEEN -84.16 AND -84.12 THEN 'Escazú'
+        WHEN f.latitud_entrega BETWEEN 9.93 AND 9.98
+         AND f.longitud_entrega BETWEEN -84.12 AND -84.06 THEN 'Santa Ana'
+        WHEN f.latitud_entrega BETWEEN 9.85 AND 9.92
+         AND f.longitud_entrega BETWEEN -83.95 AND -83.88 THEN 'Cartago Centro'
+        WHEN f.latitud_entrega BETWEEN 9.98 AND 10.02
+         AND f.longitud_entrega BETWEEN -84.12 AND -84.06 THEN 'Heredia Centro'
+        WHEN f.latitud_entrega BETWEEN 10.00 AND 10.05
+         AND f.longitud_entrega BETWEEN -84.23 AND -84.17 THEN 'Alajuela Centro'
+        ELSE 'Otra zona'
+    END,
     r.zona_geografica, r.nombre;
 
 -- ============================================================

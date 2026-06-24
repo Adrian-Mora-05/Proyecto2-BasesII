@@ -264,11 +264,9 @@ services:
       /bin/bash -c "
         pip install --quiet pyhive thrift thrift-sasl &&
         superset db upgrade &&
-        superset fab create-admin
-          --username admin --firstname Admin --lastname User
-          --email admin@superset.local --password admin || true &&
+        superset fab create-admin --username admin --firstname Admin --lastname User --email admin@superset.local --password admin || true &&
         superset init &&
-        superset run -p 8088 --with-threads --reload --debugger
+        superset run -h 0.0.0.0 -p 8088 --with-threads
       "
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8088/health"]
