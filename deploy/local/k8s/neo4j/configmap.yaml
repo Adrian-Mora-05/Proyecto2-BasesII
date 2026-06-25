@@ -1,0 +1,69 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: neo4j-config
+  namespace: restaurantes
+data:
+  # Configuración de Neo4J
+  NEO4J_AUTH: "neo4j/password123"
+  NEO4J_PLUGINS: '["graph-data-science", "apoc"]'
+  NEO4J_dbms_security_procedures_unrestricted: "gds.*,apoc.*"
+  NEO4J_dbms_security_procedures_allowlist: "gds.*,apoc.*"
+  NEO4J_apoc_export_file_enabled: "true"
+  NEO4J_apoc_import_file_enabled: "true"
+  NEO4J_apoc_import_file_use__neo4j__config: "true"
+
+  # Script de seed de ubicaciones (se carga con cypher-shell al iniciar)
+  ubicaciones.cypher: |
+    MERGE (:Ubicacion { id: 'cartago-centro', nombre: 'Cartago Centro', lat: 9.8647, lng: -83.9192 });
+    MERGE (:Ubicacion { id: 'tres-rios',      nombre: 'Tres Rios',      lat: 9.9003, lng: -83.9917 });
+    MERGE (:Ubicacion { id: 'la-union',       nombre: 'La Union',       lat: 9.9086, lng: -83.9614 });
+    MERGE (:Ubicacion { id: 'san-diego',      nombre: 'San Diego',      lat: 9.8891, lng: -83.9456 });
+    MERGE (:Ubicacion { id: 'paraiso',        nombre: 'Paraiso',        lat: 9.8358, lng: -83.8650 });
+    MERGE (:Ubicacion { id: 'el-tejar',       nombre: 'El Tejar',       lat: 9.8514, lng: -83.9758 });
+    MERGE (:Ubicacion { id: 'san-rafael',     nombre: 'San Rafael',     lat: 9.9200, lng: -83.9300 });
+    MERGE (:Ubicacion { id: 'agua-caliente',  nombre: 'Agua Caliente',  lat: 9.8750, lng: -83.9050 });
+
+    MATCH (a:Ubicacion { id: 'cartago-centro' }) MATCH (b:Ubicacion { id: 'san-diego' })
+    MERGE (a)-[:CONECTA { distancia_km: 3.2, tiempo_min: 8  }]->(b)
+    MERGE (b)-[:CONECTA { distancia_km: 3.2, tiempo_min: 8  }]->(a);
+
+    MATCH (a:Ubicacion { id: 'cartago-centro' }) MATCH (b:Ubicacion { id: 'agua-caliente' })
+    MERGE (a)-[:CONECTA { distancia_km: 2.5, tiempo_min: 6  }]->(b)
+    MERGE (b)-[:CONECTA { distancia_km: 2.5, tiempo_min: 6  }]->(a);
+
+    MATCH (a:Ubicacion { id: 'cartago-centro' }) MATCH (b:Ubicacion { id: 'el-tejar' })
+    MERGE (a)-[:CONECTA { distancia_km: 4.1, tiempo_min: 10 }]->(b)
+    MERGE (b)-[:CONECTA { distancia_km: 4.1, tiempo_min: 10 }]->(a);
+
+    MATCH (a:Ubicacion { id: 'cartago-centro' }) MATCH (b:Ubicacion { id: 'paraiso' })
+    MERGE (a)-[:CONECTA { distancia_km: 7.8, tiempo_min: 15 }]->(b)
+    MERGE (b)-[:CONECTA { distancia_km: 7.8, tiempo_min: 15 }]->(a);
+
+    MATCH (a:Ubicacion { id: 'san-diego' }) MATCH (b:Ubicacion { id: 'la-union' })
+    MERGE (a)-[:CONECTA { distancia_km: 4.5, tiempo_min: 10 }]->(b)
+    MERGE (b)-[:CONECTA { distancia_km: 4.5, tiempo_min: 10 }]->(a);
+
+    MATCH (a:Ubicacion { id: 'san-diego' }) MATCH (b:Ubicacion { id: 'agua-caliente' })
+    MERGE (a)-[:CONECTA { distancia_km: 2.8, tiempo_min: 7  }]->(b)
+    MERGE (b)-[:CONECTA { distancia_km: 2.8, tiempo_min: 7  }]->(a);
+
+    MATCH (a:Ubicacion { id: 'la-union' }) MATCH (b:Ubicacion { id: 'tres-rios' })
+    MERGE (a)-[:CONECTA { distancia_km: 3.9, tiempo_min: 9  }]->(b)
+    MERGE (b)-[:CONECTA { distancia_km: 3.9, tiempo_min: 9  }]->(a);
+
+    MATCH (a:Ubicacion { id: 'la-union' }) MATCH (b:Ubicacion { id: 'san-rafael' })
+    MERGE (a)-[:CONECTA { distancia_km: 5.2, tiempo_min: 12 }]->(b)
+    MERGE (b)-[:CONECTA { distancia_km: 5.2, tiempo_min: 12 }]->(a);
+
+    MATCH (a:Ubicacion { id: 'tres-rios' }) MATCH (b:Ubicacion { id: 'san-rafael' })
+    MERGE (a)-[:CONECTA { distancia_km: 4.7, tiempo_min: 11 }]->(b)
+    MERGE (b)-[:CONECTA { distancia_km: 4.7, tiempo_min: 11 }]->(a);
+
+    MATCH (a:Ubicacion { id: 'agua-caliente' }) MATCH (b:Ubicacion { id: 'paraiso' })
+    MERGE (a)-[:CONECTA { distancia_km: 6.3, tiempo_min: 13 }]->(b)
+    MERGE (b)-[:CONECTA { distancia_km: 6.3, tiempo_min: 13 }]->(a);
+
+    MATCH (a:Ubicacion { id: 'el-tejar' }) MATCH (b:Ubicacion { id: 'san-rafael' })
+    MERGE (a)-[:CONECTA { distancia_km: 8.1, tiempo_min: 18 }]->(b)
+    MERGE (b)-[:CONECTA { distancia_km: 8.1, tiempo_min: 18 }]->(a);

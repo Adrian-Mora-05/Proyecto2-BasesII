@@ -1,0 +1,100 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: neo4j-migrate
+  namespace: restaurantes
+  labels:
+    app: neo4j-migrate
+spec:
+  # El job solo corre una vez. Si falla, reintenta hasta 3 veces.
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        # Espera a que Neo4J esté listo antes de migrar
+        - name: wait-for-neo4j
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Esperando Neo4J..."
+              until nc -z neo4j-service 7687; do
+                echo "Neo4J no disponible, reintentando en 5s..."
+                sleep 5
+              done
+              echo "Neo4J disponible."
+              # Esperar un poco mas para que los plugins carguen
+              sleep 15
+      containers:
+        - name: neo4j-migrate
+          image: node:20-alpine
+          workingDir: /app
+          command:
+            - sh
+            - -c
+            - |
+              npm install neo4j-driver pg mongodb
+              node migrate.js
+          env:
+            - name: NEO4J_URI
+              value: "bolt://neo4j-service:7687"
+            - name: NEO4J_USER
+              value: "neo4j"
+            - name: NEO4J_PASSWORD
+              value: "password123"
+            - name: DB_ENGINE
+              valueFrom:
+                configMapKeyRef:
+                  # Lee del configmap correcto según el motor activo
+                  # Cambiar a configmap.mongo si se usa MongoDB
+                  name: app-config-postgres
+                  key: DB_ENGINE
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config-postgres
+                  key: DB_HOST
+            - name: DB_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config-postgres
+                  key: DB_PORT
+            - name: DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config-postgres
+                  key: DB_NAME
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_PASSWORD
+          volumeMounts:
+            - name: migrate-script
+              mountPath: /app/migrate.js
+              subPath: migrate.js
+      volumes:
+        - name: migrate-script
+          configMap:
+            name: neo4j-migrate-script
+---
+# ConfigMap con el script de migración
+# En producción esto vendría de la imagen Docker del proyecto
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: neo4j-migrate-script
+  namespace: restaurantes
+data:
+  migrate.js: |
+    // Script de migración simplificado para K8s
+    // El script completo está en neo4j/migrate.js del repositorio
+    // Este wrapper lo invoca desde el Job con las variables de entorno ya seteadas
+    import('file:///app/migrate.js').catch(console.error);

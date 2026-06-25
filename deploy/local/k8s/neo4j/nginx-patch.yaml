@@ -1,0 +1,75 @@
+# deploy/local/k8s/neo4j/nginx-patch.yaml
+#
+# Agrega las rutas /grafos/ y /rutas/ al ConfigMap de Nginx.
+# Aplicar DESPUÉS de que rutas-service esté corriendo.
+#
+# Uso:
+#   kubectl apply -f deploy/local/k8s/neo4j/nginx-patch.yaml
+#   kubectl rollout restart deployment/nginx -n restaurantes
+#
+# NOTA: Este archivo extiende la configuración de nginx existente.
+# Si el ConfigMap de Nginx ya incluye estas rutas, no es necesario aplicarlo.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: restaurantes
+data:
+  nginx.conf: |
+    events { worker_connections 1024; }
+
+    http {
+      # Upstream: API principal (escalable)
+      upstream api_cluster {
+        server api-service:3000;
+      }
+
+      # Upstream: Microservicio de búsqueda
+      upstream search_cluster {
+        server search-service:4000;
+      }
+
+      # Upstream: Microservicio de grafos y rutas (Neo4J)
+      upstream rutas_cluster {
+        server rutas-service:5000;
+      }
+
+      server {
+        listen 80;
+
+        # API principal
+        location /api/ {
+          proxy_pass http://api_cluster;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+        }
+
+        # Microservicio de búsqueda
+        location /search/ {
+          proxy_pass http://search_cluster;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+        }
+
+        # Análisis de grafos (Neo4J) — Punto 5
+        location /grafos/ {
+          proxy_pass http://rutas_cluster;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+        }
+
+        # Asignación de rutas de entrega — Punto 6
+        location /rutas/ {
+          proxy_pass http://rutas_cluster;
+          proxy_set_header Host $host;
+          proxy_set_header X-Real-IP $remote_addr;
+        }
+
+        # Health check de Nginx
+        location /health {
+          return 200 'OK';
+          add_header Content-Type text/plain;
+        }
+      }
+    }

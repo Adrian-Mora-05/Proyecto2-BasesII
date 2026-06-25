@@ -1,0 +1,112 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rutas-service
+  namespace: restaurantes
+  labels:
+    app: rutas-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rutas-service
+  template:
+    metadata:
+      labels:
+        app: rutas-service
+    spec:
+      containers:
+        - name: rutas-service
+          # Imagen construida desde rutas-service/Dockerfile
+          # En CI/CD se publica en ghcr.io/<org>/rutas-service:latest
+          image: ghcr.io/adrian-mora-05/rutas-service:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 5000
+              name: http
+          env:
+            # Conexión a Neo4J
+            - name: NEO4J_URI
+              value: "bolt://neo4j-service:7687"
+            - name: NEO4J_USER
+              value: "neo4j"
+            - name: NEO4J_PASSWORD
+              value: "password123"
+            # Motor de BD (para leer pedidos pendientes)
+            - name: DB_ENGINE
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config-postgres   # cambiar a app-config-mongo si aplica
+                  key: DB_ENGINE
+            # Postgres
+            - name: DB_HOST
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config-postgres
+                  key: DB_HOST
+            - name: DB_PORT
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config-postgres
+                  key: DB_PORT
+            - name: DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config-postgres
+                  key: DB_NAME
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_USER
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: DB_PASSWORD
+            # MongoDB (solo si DB_ENGINE=mongodb)
+            - name: MONGO_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: app-config-mongo
+                  key: MONGO_URL
+                  optional: true
+            - name: MONGO_DB
+              value: "restaurantdb"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rutas-service
+  namespace: restaurantes
+  labels:
+    app: rutas-service
+spec:
+  selector:
+    app: rutas-service
+  ports:
+    - name: http
+      port: 5000
+      targetPort: 5000
+  type: ClusterIP

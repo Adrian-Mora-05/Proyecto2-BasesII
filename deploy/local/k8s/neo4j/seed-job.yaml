@@ -1,0 +1,50 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: neo4j-seed
+  namespace: restaurantes
+  labels:
+    app: neo4j-seed
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      initContainers:
+        - name: wait-for-neo4j
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Esperando Neo4J HTTP..."
+              until wget -q -O- http://neo4j-service:7474 > /dev/null 2>&1; do
+                echo "Neo4J no disponible, reintentando en 10s..."
+                sleep 10
+              done
+              echo "Neo4J listo."
+              sleep 5
+      containers:
+        - name: neo4j-seed
+          image: neo4j:5.18
+          command:
+            - sh
+            - -c
+            - |
+              echo "Cargando ubicaciones en Neo4J..."
+              cypher-shell \
+                -a bolt://neo4j-service:7687 \
+                -u neo4j \
+                -p password123 \
+                -f /import/ubicaciones.cypher
+              echo "Seed completado."
+          volumeMounts:
+            - name: neo4j-import
+              mountPath: /import
+      volumes:
+        - name: neo4j-import
+          configMap:
+            name: neo4j-config
+            items:
+              - key: ubicaciones.cypher
+                path: ubicaciones.cypher
